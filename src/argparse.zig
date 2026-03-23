@@ -7,7 +7,22 @@ fn print_version(writer: *std.fs.File.Writer) !void {
 }
 
 fn print_usage(writer: *std.fs.File.Writer) !void {
-    try writer.interface.print("Usage: msort [-o outfile] [-T tmpdir] [--qsort] [file ...]\n", .{});
+    const usage =
+        \\Usage: msort [-o outfile] [-T tmpdir] [--qsort] [file ...]
+        \\
+        \\Mini sort implementation in Zig.
+        \\
+        \\Options:
+        \\  -o          Write output to file, instead of stdout
+        \\  -T          Write temporary files to specified directory
+        \\
+        \\Other options:
+        \\  --qsort     Use quicksort algorithm
+        \\
+        \\Arguments:
+        \\  file ...    File(s) to sort. If no files are provided, stdin is used.
+    ;
+    try writer.interface.print("{s}\n", .{usage});
     try writer.interface.flush();
 }
 
@@ -29,9 +44,7 @@ pub const Args = struct {
     tmp_dir: []const u8 = "tmp",
 
     pub fn deinit(self: Args, gpa: std.mem.Allocator) void {
-        if (self.filenames != null) {
-            gpa.free(self.filenames.?);
-        }
+        if (self.filenames != null) gpa.free(self.filenames.?);
     }
 
     fn parse_flags(self: *Args, argv: []const [:0]u8, i: *usize) !bool {

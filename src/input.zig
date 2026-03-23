@@ -159,21 +159,36 @@ test "Input: next, test_26.txt" {
     const test_gpa = std.testing.allocator;
     const buffer = try test_gpa.alloc(u8, 1024);
     defer test_gpa.free(buffer);
-    try test_next_helper(test_gpa, buffer, &[_][]const u8{"test_data/test_26.txt"}, 26 * Line.size());
+    try test_next_helper(
+        test_gpa,
+        buffer,
+        &[_][]const u8{"test_data/test_26.txt"},
+        26 * Line.size(),
+    );
 }
 
 test "Input: next, test_26.txt, line_table_size 10 lines" {
     const test_gpa = std.testing.allocator;
     const buffer = try test_gpa.alloc(u8, 1024);
     defer test_gpa.free(buffer);
-    try test_next_helper(test_gpa, buffer, &[_][]const u8{"test_data/test_26.txt"}, 10 * Line.size());
+    try test_next_helper(
+        test_gpa,
+        buffer,
+        &[_][]const u8{"test_data/test_26.txt"},
+        10 * Line.size(),
+    );
 }
 
 test "Input: next, test_26.txt, line_table 26, buffer 30" {
     const test_gpa = std.testing.allocator;
     const buffer = try test_gpa.alloc(u8, 30);
     defer test_gpa.free(buffer);
-    try test_next_helper(test_gpa, buffer, &[_][]const u8{"test_data/test_26.txt"}, 26 * Line.size());
+    try test_next_helper(
+        test_gpa,
+        buffer,
+        &[_][]const u8{"test_data/test_26.txt"},
+        26 * Line.size(),
+    );
 }
 
 test "Input: next, test_26.txt and test_additional.txt" {
