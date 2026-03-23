@@ -89,7 +89,7 @@ pub const Args = struct {
         return parsed_args;
     }
 
-    pub fn validate(self: Args, writer: *std.fs.File.Writer) !bool {
+    pub fn validate(self: Args, writer: *std.fs.File.Writer) !void {
         if (self.filenames) |filenames| {
             for (filenames) |filename| {
                 var file = std.fs.cwd().openFile(filename, .{ .mode = .read_only }) catch |err| {
@@ -98,19 +98,15 @@ pub const Args = struct {
                         error.AccessDenied => try print_error(writer, "Read access denied"),
                         else => return err,
                     }
-                    return false;
+                    return error.ValidationFailed;
                 };
                 defer file.close();
             }
         } else {
             const file = std.fs.File.stdin();
             const stat = try file.stat();
-            if (stat.size == 0) {
-                try print_usage(writer);
-                return true;
-            }
+            if (stat.size == 0) try print_usage(writer);
         }
-        return true;
     }
 
     pub fn debug_print(self: Args) void {

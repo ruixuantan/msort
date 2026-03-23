@@ -7,8 +7,16 @@ const OUTPUT_BUFFER_SIZE = 1 * 1024 * 1024;
 
 pub fn main() !void {
     defer std.process.exit(0);
-    var allocator = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = allocator.deinit();
+    errdefer std.process.exit(1);
+
+    var allocator: std.heap.DebugAllocator(.{}) = .init;
+    defer {
+        const check = allocator.deinit();
+        if (check == .leak) {
+            std.log.err("memory leak detected", .{});
+            std.process.exit(1);
+        }
+    }
     const gpa = allocator.allocator();
 
     const raw_args = try std.process.argsAlloc(gpa);
@@ -19,16 +27,11 @@ pub fn main() !void {
     defer stdout.close();
     var stdout_writer = stdout.writer(&stdout_buffer);
 
-    const parsed_args = msort.Args.parse(gpa, raw_args, &stdout_writer) catch |err| {
-        switch (err) {
-            error.ArgParseError => std.process.exit(1),
-            else => return err,
-        }
-    };
-    if (parsed_args == null) std.process.exit(0);
+    const parsed_args = try msort.Args.parse(gpa, raw_args, &stdout_writer);
+    if (parsed_args == null) return;
     const args = parsed_args.?;
     defer args.deinit(gpa);
-    if (!try args.validate(&stdout_writer)) std.process.exit(1);
+    try args.validate(&stdout_writer);
 
     const input_buffer = try gpa.alignedAlloc(u8, null, INPUT_BUFFER_SIZE);
     defer gpa.free(input_buffer);
@@ -52,13 +55,13 @@ pub fn main() !void {
         if (run == 0 and !input.has_next()) {
             @branchHint(.cold);
             try output.write_to_file(line_table);
-            std.process.exit(0);
+            return;
         } else if (run == 0) {
             try output.create_tmp_dir();
         }
         try output.write_to_tmp(line_table, run);
     }
-    if (run == 0) std.process.exit(0);
+    if (run == 0) return;
 
     var writer = try output.get_writer();
     var merge = try msort.Merge.init(gpa, &args, input_buffer, run, &writer);
