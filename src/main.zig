@@ -19,8 +19,13 @@ pub fn main() !void {
     defer stdout.close();
     var stdout_writer = stdout.writer(&stdout_buffer);
 
-    const parsed_args = try msort.Args.parse(gpa, raw_args, &stdout_writer);
-    if (parsed_args == null) std.process.exit(1);
+    const parsed_args = msort.Args.parse(gpa, raw_args, &stdout_writer) catch |err| {
+        switch (err) {
+            error.ArgParseError => std.process.exit(1),
+            else => return err,
+        }
+    };
+    if (parsed_args == null) std.process.exit(0);
     const args = parsed_args.?;
     defer args.deinit(gpa);
     if (!try args.validate(&stdout_writer)) std.process.exit(1);
@@ -53,6 +58,7 @@ pub fn main() !void {
         }
         try output.write_to_tmp(line_table, run);
     }
+    if (run == 0) std.process.exit(0);
 
     var writer = try output.get_writer();
     var merge = try msort.Merge.init(gpa, &args, input_buffer, run, &writer);

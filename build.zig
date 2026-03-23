@@ -1,13 +1,23 @@
 const std = @import("std");
 
+const manifest = @import("build.zig.zon");
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{ .preferred_optimize_mode = .ReleaseSafe });
+    const version: std.SemanticVersion = std.SemanticVersion.parse(manifest.version) catch {
+        std.log.err("Failed to parse version: {s}\n", .{manifest.version});
+        std.process.exit(1);
+    };
     const mod = b.addModule("msort", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
     });
+
+    const build_options = b.addOptions();
+    build_options.addOption([]const u8, "version", manifest.version);
+    mod.addOptions("build_options", build_options);
 
     const lib = b.addLibrary(.{
         .name = "msort",
@@ -18,6 +28,7 @@ pub fn build(b: *std.Build) void {
 
     const exe = b.addExecutable(.{
         .name = "msort",
+        .version = version,
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,

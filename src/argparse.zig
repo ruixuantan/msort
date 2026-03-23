@@ -1,7 +1,13 @@
 const std = @import("std");
+const build_options = @import("build_options");
+
+fn print_version(writer: *std.fs.File.Writer) !void {
+    try writer.interface.print("{s}\n", .{build_options.version});
+    try writer.interface.flush();
+}
 
 fn print_usage(writer: *std.fs.File.Writer) !void {
-    try writer.interface.print("Usage: msort [-o outfile] [-T tmpdir] [file ...]\n", .{});
+    try writer.interface.print("Usage: msort [-o outfile] [-T tmpdir] [--qsort] [file ...]\n", .{});
     try writer.interface.flush();
 }
 
@@ -57,12 +63,15 @@ pub const Args = struct {
         if (std.mem.eql(u8, args[1], "--help")) {
             try print_usage(writer);
             return null;
+        } else if (std.mem.eql(u8, args[1], "--version")) {
+            try print_version(writer);
+            return null;
         }
 
         var i: usize = 1;
         if (!try parsed_args.parse_flags(args, &i)) {
             try print_error(writer, "Invalid flags");
-            return null;
+            return error.ArgParseError;
         }
 
         var files: std.ArrayList([]const u8) = .empty;
@@ -74,7 +83,7 @@ pub const Args = struct {
         if (parsed_args.filenames.?.len == 0) {
             try print_error(writer, "No files provided");
             gpa.free(parsed_args.filenames.?);
-            return null;
+            return error.ArgParseError;
         }
 
         return parsed_args;

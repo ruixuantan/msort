@@ -29,6 +29,7 @@ pub const Merge = struct {
         num_runs: usize,
         writer: *std.fs.File.Writer,
     ) !Merge {
+        std.debug.assert(num_runs > 0);
         var files = try std.ArrayList(std.fs.File).initCapacity(gpa, num_runs);
         var readers = try std.ArrayList(*std.fs.File.Reader).initCapacity(gpa, num_runs);
         const run_buffer_size = @divFloor(buffer.len, num_runs);
