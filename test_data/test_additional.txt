@@ -1,0 +1,12 @@
+banana
+apple
+orange
+pear
+pineapple
+strawberry
+blueberry
+raspberry
+blackberry
+cherry
+grape
+watermelon

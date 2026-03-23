@@ -1,0 +1,19 @@
+---
+globs: "src/**/*.zig"
+alwaysApply: false
+---
+# Zig (msort)
+
+## Guidelines
+
+- After allocating dynamically, pair cleanup with `defer` (e.g. `defer x.deinit()` or `defer allocator.free(...)` as appropriate).
+- After opening IO handles, `defer` their close/shutdown so they always run on exit paths.
+- Use `std.debug.assert` freely where invariants help correctness.
+- In tests, use this for the test allocator: `const test_gpa = std.testing.allocator;`
+- `main.zig` must import only from `root.zig` (no direct imports of other modules).
+
+## Code style
+
+- Functions: `snake_case`. Structs and types: `PascalCase`.
+- Match `zig fmt` output; keep lines at most **100** characters.
+- When a line would exceed 100 characters, break using trailing commas inside `(...)` or `{...}` so `zig fmt` can wrap cleanly.

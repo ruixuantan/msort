@@ -1,0 +1,9 @@
+*.DS_Store
+
+crap
+
+data/
+*.out
+
+.zig-cache/
+zig-out/
