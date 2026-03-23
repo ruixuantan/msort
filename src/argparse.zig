@@ -9,14 +9,15 @@ fn print_version(writer: *std.fs.File.Writer) !void {
 
 fn print_usage(writer: *std.fs.File.Writer) !void {
     const usage =
-        \\Usage: msort [-r] [-o outfile] [-T tmpdir] [--qsort] [file ...]
+        \\Usage: msort [-S memsize] [-T tmpdir] [-o outfile] [-r] [--qsort] [file ...]
         \\
-        \\Mini sort implementation in Zig.
+        \\Mini sort implementation in Zig, defaulting to lexicographic order merge sort.
         \\
         \\Options:
-        \\  -r          Reverse the order of the sort
+        \\  -S          Maximum memory size used to run msort. Units: K,M,G
+        \\  -T          Write temporary files to specified directory, if sort file does not fit in memory
         \\  -o          Write output to file, instead of stdout
-        \\  -T          Write temporary files to specified directory
+        \\  -r          Reverse the order of the sort
         \\
         \\Other options:
         \\  --qsort     Use quicksort algorithm
@@ -39,15 +40,26 @@ pub const SortAlgorithm = enum {
 };
 
 pub const Args = struct {
+    cmp_algorithm: line.LineCmp = line.Line.lexicographic_cmp,
+    memsize: usize = 8 * 1024 * 1024,
+    tmp_dir: []const u8 = "tmp",
     outfile: ?[]const u8 = null,
+    sort_algorithm: SortAlgorithm = .mergesort,
     filenames: ?[]const []const u8 = null,
     delimiter: u8 = '\n',
-    cmp_algorithm: line.LineCmp = line.Line.lexicographic_cmp,
-    sort_algorithm: SortAlgorithm = .mergesort,
-    tmp_dir: []const u8 = "tmp",
 
     pub fn deinit(self: Args, gpa: std.mem.Allocator) void {
         if (self.filenames != null) gpa.free(self.filenames.?);
+    }
+
+    fn parse_memsize(str: []const u8) !usize {
+        const value = try std.fmt.parseInt(usize, str[0 .. str.len - 1], 10);
+        switch (str[str.len - 1]) {
+            'K' => return value * 1024,
+            'M' => return value * 1024 * 1024,
+            'G' => return value * 1024 * 1024 * 1024,
+            else => return error.InvalidMemsize,
+        }
     }
 
     fn parse_flags(self: *Args, argv: []const [:0]u8, i: *usize) !bool {
@@ -55,19 +67,24 @@ pub const Args = struct {
             const arg = argv[i.*];
             if (arg.len == 0 or arg[0] != '-') break;
 
-            if (std.mem.eql(u8, arg, "-r")) {
-                i.* += 1;
-                self.cmp_algorithm = line.Line.rlexicographic_cmp;
-            } else if (std.mem.eql(u8, arg, "-o")) {
+            if (std.mem.eql(u8, arg, "-S")) {
                 i.* += 1;
                 if (i.* >= argv.len) return false;
-                self.outfile = argv[i.*];
+                self.memsize = parse_memsize(argv[i.*]) catch return false;
                 i.* += 1;
             } else if (std.mem.eql(u8, arg, "-T")) {
                 i.* += 1;
                 if (i.* >= argv.len) return false;
                 self.tmp_dir = argv[i.*];
                 i.* += 1;
+            } else if (std.mem.eql(u8, arg, "-o")) {
+                i.* += 1;
+                if (i.* >= argv.len) return false;
+                self.outfile = argv[i.*];
+                i.* += 1;
+            } else if (std.mem.eql(u8, arg, "-r")) {
+                i.* += 1;
+                self.cmp_algorithm = line.Line.rlexicographic_cmp;
             } else if (std.mem.eql(u8, arg, "--qsort")) {
                 i.* += 1;
                 self.sort_algorithm = .quicksort;
@@ -128,13 +145,15 @@ pub const Args = struct {
         }
     }
 
-    pub fn debug_print(self: Args) void {
-        std.debug.print("outfile: {any}\n", .{self.outfile});
-        std.debug.print("tmpdir: {s}\n", .{self.tmp_dir});
-        if (self.filenames != null) {
-            for (self.filenames.?) |filename| {
-                std.debug.print("filename: {s}\n", .{filename});
-            }
-        }
+    pub fn input_buffer_size(self: Args) usize {
+        return self.memsize >> 1;
+    }
+
+    pub fn line_table_size(self: Args) usize {
+        return self.memsize >> 2;
+    }
+
+    pub fn output_buffer_size(self: Args) usize {
+        return self.memsize >> 3;
     }
 };

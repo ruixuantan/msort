@@ -1,10 +1,6 @@
 const std = @import("std");
 const msort = @import("msort");
 
-const INPUT_BUFFER_SIZE = 4 * 1024 * 1024;
-const LINE_TABLE_SIZE = 2 * 1024 * 1024;
-const OUTPUT_BUFFER_SIZE = 1 * 1024 * 1024;
-
 pub fn main() !void {
     defer std.process.exit(0);
     errdefer std.process.exit(1);
@@ -33,13 +29,13 @@ pub fn main() !void {
     defer args.deinit(gpa);
     try args.validate(&stdout_writer);
 
-    const input_buffer = try gpa.alignedAlloc(u8, null, INPUT_BUFFER_SIZE);
+    const input_buffer = try gpa.alignedAlloc(u8, null, args.input_buffer_size());
     defer gpa.free(input_buffer);
 
-    var input = try msort.Input.init(gpa, &args, input_buffer, LINE_TABLE_SIZE);
+    var input = try msort.Input.init(gpa, &args, input_buffer, args.line_table_size());
     defer input.deinit();
 
-    const output_buffer = try gpa.alloc(u8, OUTPUT_BUFFER_SIZE);
+    const output_buffer = try gpa.alloc(u8, args.output_buffer_size());
     defer gpa.free(output_buffer);
     var output = try msort.Output.init(gpa, &args, output_buffer);
     defer output.cleanup();

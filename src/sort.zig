@@ -100,7 +100,7 @@ pub fn mergesort(gpa: std.mem.Allocator, line_table: LineTable, cmp: LineCmp) !v
 }
 
 fn median_of_3(line_table: LineTable, cmp: LineCmp) Line {
-    const mid = @divFloor(line_table.lines.len, 2);
+    const mid = line_table.lines.len >> 1;
     var tmp: [3]Line = .{
         line_table.lines[0],
         line_table.lines[mid],
