@@ -1,4 +1,5 @@
 const std = @import("std");
+const line = @import("line.zig");
 const Args = @import("argparse.zig").Args;
 
 pub const Merge = struct {
@@ -12,15 +13,19 @@ pub const Merge = struct {
 
     const HeapNode = struct { run_idx: usize, string: []const u8 };
 
-    fn compare(_: void, a: HeapNode, b: HeapNode) std.math.Order {
-        const key_order = std.mem.order(u8, a.string, b.string);
+    const HeapContext = struct { cmp: line.LineCmp };
+
+    fn compare(ctx: HeapContext, a: HeapNode, b: HeapNode) std.math.Order {
+        const a_line = line.Line.init(a.string, 0);
+        const b_line = line.Line.init(b.string, 0);
+        const key_order = ctx.cmp(a_line, a.string, b_line, b.string);
         if (key_order != .eq) {
             return key_order;
         }
         return std.math.order(a.run_idx, b.run_idx);
     }
 
-    const Heap = std.PriorityQueue(HeapNode, void, compare);
+    const Heap = std.PriorityQueue(HeapNode, HeapContext, compare);
 
     pub fn init(
         gpa: std.mem.Allocator,
@@ -78,8 +83,8 @@ pub const Merge = struct {
         return .{ .run_idx = run_no, .string = string };
     }
 
-    pub fn kway(self: *Merge) !void {
-        var heap = Heap.init(self.gpa, undefined);
+    pub fn kway(self: *Merge, cmp: line.LineCmp) !void {
+        var heap = Heap.init(self.gpa, .{ .cmp = cmp });
         defer heap.deinit();
         for (0..self.num_runs) |run_no| {
             if (try self.next_heap_node(run_no)) |node| {
@@ -118,7 +123,7 @@ test "Merge: kway" {
 
     var merge = try Merge.init(test_gpa, &args, buffer, 2, &writer);
     defer merge.deinit();
-    try merge.kway();
+    try merge.kway(line.Line.lexicographic_cmp);
 
     var reader_buffer: [1024]u8 = undefined;
     tmp_file.close();

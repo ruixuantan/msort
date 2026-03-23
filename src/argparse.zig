@@ -1,5 +1,6 @@
 const std = @import("std");
 const build_options = @import("build_options");
+const line = @import("line.zig");
 
 fn print_version(writer: *std.fs.File.Writer) !void {
     try writer.interface.print("{s}\n", .{build_options.version});
@@ -8,11 +9,12 @@ fn print_version(writer: *std.fs.File.Writer) !void {
 
 fn print_usage(writer: *std.fs.File.Writer) !void {
     const usage =
-        \\Usage: msort [-o outfile] [-T tmpdir] [--qsort] [file ...]
+        \\Usage: msort [-r] [-o outfile] [-T tmpdir] [--qsort] [file ...]
         \\
         \\Mini sort implementation in Zig.
         \\
         \\Options:
+        \\  -r          Reverse the order of the sort
         \\  -o          Write output to file, instead of stdout
         \\  -T          Write temporary files to specified directory
         \\
@@ -40,6 +42,7 @@ pub const Args = struct {
     outfile: ?[]const u8 = null,
     filenames: ?[]const []const u8 = null,
     delimiter: u8 = '\n',
+    cmp_algorithm: line.LineCmp = line.Line.lexicographic_cmp,
     sort_algorithm: SortAlgorithm = .mergesort,
     tmp_dir: []const u8 = "tmp",
 
@@ -52,7 +55,10 @@ pub const Args = struct {
             const arg = argv[i.*];
             if (arg.len == 0 or arg[0] != '-') break;
 
-            if (std.mem.eql(u8, arg, "-o")) {
+            if (std.mem.eql(u8, arg, "-r")) {
+                i.* += 1;
+                self.cmp_algorithm = line.Line.rlexicographic_cmp;
+            } else if (std.mem.eql(u8, arg, "-o")) {
                 i.* += 1;
                 if (i.* >= argv.len) return false;
                 self.outfile = argv[i.*];
