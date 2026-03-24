@@ -2,6 +2,7 @@ const std = @import("std");
 const Args = @import("argparse.zig").Args;
 const Line = @import("line.zig").Line;
 const LineTable = @import("line.zig").LineTable;
+const Key = @import("line.zig").Key;
 
 pub const Input = struct {
     gpa: std.mem.Allocator,
@@ -81,19 +82,25 @@ pub const Input = struct {
         // TODO: Change to simd implementation
         var prev: usize = 0;
         var i: usize = 0;
+        std.debug.assert(self.args.keys.len > 0);
         while (i < contents.len) : (i += 1) {
             if (self.line_table.items.len == self.line_table_capacity) {
                 break;
             } else if (contents[i] == self.args.delimiter) {
                 self.line_table.appendAssumeCapacity(
-                    Line.init(contents[prev..i], prev),
+                    Line.init(contents[prev..i], prev, self.args.keys[0], self.args.separator),
                 );
                 prev = i + 1;
             } else if (i == contents.len - 1) {
                 const at_eof = self.file_pos + contents.len >= self.file_size;
                 if (at_eof) {
                     self.line_table.appendAssumeCapacity(
-                        Line.init(contents[prev .. i + 1], prev),
+                        Line.init(
+                            contents[prev .. i + 1],
+                            prev,
+                            self.args.keys[0],
+                            self.args.separator,
+                        ),
                     );
                     prev = i + 1;
                 }
@@ -127,7 +134,7 @@ fn test_next_helper(
         file_parts[i] = try file.readToEndAlloc(gpa, 1024);
     }
 
-    const args = Args{ .filenames = paths };
+    const args = Args{ .filenames = paths, .keys = &[_]Key{.{ .start = 1, .end = 0 }} };
     var input = try Input.init(gpa, &args, buffer, line_table_size);
     defer input.deinit();
 

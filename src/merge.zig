@@ -13,12 +13,12 @@ pub const Merge = struct {
 
     const HeapNode = struct { run_idx: usize, string: []const u8 };
 
-    const HeapContext = struct { cmp: line.LineCmp };
+    const HeapContext = struct { args: *const Args };
 
     fn compare(ctx: HeapContext, a: HeapNode, b: HeapNode) std.math.Order {
-        const a_line = line.Line.init(a.string, 0);
-        const b_line = line.Line.init(b.string, 0);
-        const key_order = ctx.cmp(a_line, a.string, b_line, b.string);
+        const a_line = line.Line.init(a.string, 0, ctx.args.keys[0], ctx.args.separator);
+        const b_line = line.Line.init(b.string, 0, ctx.args.keys[0], ctx.args.separator);
+        const key_order = ctx.args.cmp_algorithm(ctx.args, a_line, a.string, b_line, b.string);
         if (key_order != .eq) {
             return key_order;
         }
@@ -83,8 +83,8 @@ pub const Merge = struct {
         return .{ .run_idx = run_no, .string = string };
     }
 
-    pub fn kway(self: *Merge, cmp: line.LineCmp) !void {
-        var heap = Heap.init(self.gpa, .{ .cmp = cmp });
+    pub fn kway(self: *Merge) !void {
+        var heap = Heap.init(self.gpa, .{ .args = self.args });
         defer heap.deinit();
         for (0..self.num_runs) |run_no| {
             if (try self.next_heap_node(run_no)) |node| {
@@ -112,7 +112,10 @@ pub const Merge = struct {
 
 test "Merge: kway" {
     const test_gpa = std.testing.allocator;
-    const args = Args{ .tmp_dir = "test_data/tmp" };
+    const args = Args{
+        .tmp_dir = "test_data/tmp",
+        .keys = &[_]line.Key{.{ .start = 1, .end = 0 }},
+    };
     const buffer = try test_gpa.alloc(u8, 50);
     defer test_gpa.free(buffer);
 
@@ -123,7 +126,7 @@ test "Merge: kway" {
 
     var merge = try Merge.init(test_gpa, &args, buffer, 2, &writer);
     defer merge.deinit();
-    try merge.kway(line.Line.lexicographic_cmp);
+    try merge.kway();
 
     var reader_buffer: [1024]u8 = undefined;
     tmp_file.close();

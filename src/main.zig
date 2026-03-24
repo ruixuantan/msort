@@ -44,8 +44,8 @@ pub fn main() !void {
     while (input.has_next()) : (run += 1) {
         const line_table = try input.next();
         switch (args.sort_algorithm) {
-            .quicksort => try msort.sort.quicksort(line_table, args.cmp_algorithm, 0),
-            else => try msort.sort.mergesort(gpa, line_table, args.cmp_algorithm),
+            .quicksort => try msort.sort.quicksort(line_table, &args, 0),
+            else => try msort.sort.mergesort(gpa, line_table, &args),
         }
 
         if (run == 0 and !input.has_next()) {
@@ -62,5 +62,5 @@ pub fn main() !void {
     var writer = try output.get_writer();
     var merge = try msort.Merge.init(gpa, &args, input_buffer, run, &writer);
     defer merge.deinit();
-    try merge.kway(args.cmp_algorithm);
+    try merge.kway();
 }
