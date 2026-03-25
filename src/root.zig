@@ -1,4 +1,5 @@
 const argparse = @import("argparse.zig");
+const cmp = @import("cmp.zig");
 const line = @import("line.zig");
 const input = @import("input.zig");
 pub const sort = @import("sort.zig");
@@ -12,6 +13,7 @@ pub const Merge = merge.Merge;
 
 test {
     _ = argparse;
+    _ = cmp;
     _ = line;
     _ = input;
     _ = output;

@@ -1,4 +1,5 @@
 const std = @import("std");
+const cmp = @import("cmp.zig");
 const line = @import("line.zig");
 const Args = @import("argparse.zig").Args;
 
@@ -18,7 +19,7 @@ pub const Merge = struct {
     fn compare(ctx: HeapContext, a: HeapNode, b: HeapNode) std.math.Order {
         const a_line = line.Line.init(a.string, 0, ctx.args.keys[0], ctx.args.separator);
         const b_line = line.Line.init(b.string, 0, ctx.args.keys[0], ctx.args.separator);
-        const key_order = line.Line.cmp(ctx.args, a_line, a.string, b_line, b.string);
+        const key_order = cmp.cmp(ctx.args, a_line, a.string, b_line, b.string);
         if (key_order != .eq) return key_order;
         return std.math.order(a.run_idx, b.run_idx);
     }

@@ -1,9 +1,9 @@
 const std = @import("std");
+const cmp = @import("cmp.zig");
 const line = @import("line.zig");
 const Args = @import("argparse.zig").Args;
 const LineTable = line.LineTable;
 const Line = line.Line;
-const LineCmp = line.LineCmp;
 
 pub fn insertsort(line_table: LineTable, args: *const Args) void {
     if (line_table.lines.len < 2) {
@@ -15,7 +15,7 @@ pub fn insertsort(line_table: LineTable, args: *const Args) void {
     while (i < line_table.lines.len) : (i += 1) {
         const key = line_table.lines[i];
         var j = i;
-        while (j > 0 and Line.cmp(
+        while (j > 0 and cmp.cmp(
             args,
             line_table.lines[j - 1],
             line_table.contents,
@@ -38,7 +38,7 @@ fn merge(
     args: *const Args,
 ) void {
     std.debug.assert(mid <= line_table.lines.len);
-    if (Line.cmp(
+    if (cmp.cmp(
         args,
         line_table.lines[mid - 1],
         line_table.contents,
@@ -49,7 +49,7 @@ fn merge(
     var i: usize = 0;
     var j: usize = mid;
     while (i < mid and j < line_table.lines.len) {
-        if (Line.cmp(
+        if (cmp.cmp(
             args,
             line_table.lines[i],
             line_table.contents,
@@ -137,7 +137,7 @@ pub fn quicksort(
 
     while (true) {
         i += 1;
-        while (Line.cmp(
+        while (cmp.cmp(
             args,
             line_table.lines[@intCast(i)],
             line_table.contents,
@@ -145,7 +145,7 @@ pub fn quicksort(
             line_table.contents,
         ) == .lt) : (i += 1) {}
         j -= 1;
-        while (Line.cmp(
+        while (cmp.cmp(
             args,
             line_table.lines[j],
             line_table.contents,

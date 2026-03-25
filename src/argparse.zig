@@ -1,5 +1,6 @@
 const std = @import("std");
 const build_options = @import("build_options");
+const cmp = @import("cmp.zig");
 const line = @import("line.zig");
 
 fn print_version(writer: *std.fs.File.Writer) !void {
@@ -51,7 +52,7 @@ pub const Args = struct {
     sort_algorithm: SortAlgorithm = .mergesort,
     filenames: ?[]const []const u8 = null,
     delimiter: u8 = '\n',
-    cmp_functions: []const line.LineCmp = undefined,
+    cmp_functions: []const cmp.LineCmp = undefined,
 
     pub fn deinit(self: Args, gpa: std.mem.Allocator) void {
         if (self.filenames != null) gpa.free(self.filenames.?);
@@ -182,21 +183,21 @@ pub const Args = struct {
     }
 
     pub fn build_cmp_functions(self: *Args, gpa: std.mem.Allocator) !void {
-        var cmp_functions: std.ArrayList(line.LineCmp) = .empty;
+        var cmp_functions: std.ArrayList(cmp.LineCmp) = .empty;
         try cmp_functions.append(gpa, .{
             .key_idx = 0,
-            .cmp_fn = line.Line.lexicographic_cmp_cache_key,
+            .cmp_fn = cmp.lexicographic_cmp_cache_key,
         });
         if (self.keys.len == 1 and self.keys[0].start == 1 and self.keys[0].end == 0) {} else {
             for (1..self.keys.len) |i| {
                 try cmp_functions.append(gpa, .{
                     .key_idx = i,
-                    .cmp_fn = line.Line.lexicographic_cmp_key,
+                    .cmp_fn = cmp.lexicographic_cmp_key,
                 });
             }
             try cmp_functions.append(gpa, .{
                 .key_idx = self.keys.len - 1,
-                .cmp_fn = line.Line.lexicographic_cmp_string,
+                .cmp_fn = cmp.lexicographic_cmp_string,
             });
         }
         self.cmp_functions = try cmp_functions.toOwnedSlice(gpa);
