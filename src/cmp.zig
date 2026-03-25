@@ -5,7 +5,17 @@ const line = @import("line.zig");
 const Key = line.Key;
 const Line = line.Line;
 
+const CmpType = enum {
+    lexicographic_cache_key,
+    lexicographic_key,
+    lexicographic_string,
+    reverse_lexicographic_cache_key,
+    reverse_lexicographic_key,
+    reverse_lexicographic_string,
+};
+
 pub const LineCmp = struct {
+    cmp_type: CmpType,
     key_idx: usize,
     cmp_fn: *const fn (
         key: Key,
@@ -15,6 +25,50 @@ pub const LineCmp = struct {
         y: Line,
         y_buffer: []const u8,
     ) std.math.Order,
+
+    pub fn init(cmp_type: CmpType, key_idx: usize) LineCmp {
+        return .{
+            .cmp_type = cmp_type,
+            .key_idx = key_idx,
+            .cmp_fn = switch (cmp_type) {
+                .lexicographic_cache_key => lexicographic_cmp_cache_key,
+                .lexicographic_key => lexicographic_cmp_key,
+                .lexicographic_string => lexicographic_cmp_string,
+                .reverse_lexicographic_cache_key => rlexicographic_cmp_cache_key,
+                .reverse_lexicographic_key => rlexicographic_cmp_key,
+                .reverse_lexicographic_string => rlexicographic_cmp_string,
+            },
+        };
+    }
+
+    pub fn set_reverse(self: *LineCmp) void {
+        switch (self.cmp_type) {
+            .lexicographic_cache_key => {
+                self.cmp_type = .reverse_lexicographic_cache_key;
+                self.cmp_fn = rlexicographic_cmp_cache_key;
+            },
+            .lexicographic_key => {
+                self.cmp_type = .reverse_lexicographic_key;
+                self.cmp_fn = rlexicographic_cmp_key;
+            },
+            .lexicographic_string => {
+                self.cmp_type = .reverse_lexicographic_string;
+                self.cmp_fn = rlexicographic_cmp_string;
+            },
+            .reverse_lexicographic_cache_key => {
+                self.cmp_type = .lexicographic_cache_key;
+                self.cmp_fn = lexicographic_cmp_cache_key;
+            },
+            .reverse_lexicographic_key => {
+                self.cmp_type = .lexicographic_key;
+                self.cmp_fn = lexicographic_cmp_key;
+            },
+            .reverse_lexicographic_string => {
+                self.cmp_type = .lexicographic_string;
+                self.cmp_fn = lexicographic_cmp_string;
+            },
+        }
+    }
 };
 
 pub fn lexicographic_cmp_cache_key(
@@ -34,6 +88,17 @@ pub fn lexicographic_cmp_cache_key(
     return std.mem.order(u8, x_key, y_key);
 }
 
+pub fn rlexicographic_cmp_cache_key(
+    key: Key,
+    separator: u8,
+    x: Line,
+    x_buffer: []const u8,
+    y: Line,
+    y_buffer: []const u8,
+) std.math.Order {
+    return lexicographic_cmp_cache_key(key, separator, y, y_buffer, x, x_buffer);
+}
+
 pub fn lexicographic_cmp_key(
     key: Key,
     separator: u8,
@@ -51,6 +116,17 @@ pub fn lexicographic_cmp_key(
     return std.mem.order(u8, x_key, y_key);
 }
 
+pub fn rlexicographic_cmp_key(
+    key: Key,
+    separator: u8,
+    x: Line,
+    x_buffer: []const u8,
+    y: Line,
+    y_buffer: []const u8,
+) std.math.Order {
+    return lexicographic_cmp_key(key, separator, y, y_buffer, x, x_buffer);
+}
+
 pub fn lexicographic_cmp_string(
     key: Key,
     separator: u8,
@@ -64,6 +140,17 @@ pub fn lexicographic_cmp_string(
     const x_str = x_buffer[@as(usize, x.offset)..][0..@as(usize, x.length)];
     const y_str = y_buffer[@as(usize, y.offset)..][0..@as(usize, y.length)];
     return std.mem.order(u8, x_str, y_str);
+}
+
+pub fn rlexicographic_cmp_string(
+    key: Key,
+    separator: u8,
+    x: Line,
+    x_buffer: []const u8,
+    y: Line,
+    y_buffer: []const u8,
+) std.math.Order {
+    return lexicographic_cmp_string(key, separator, y, y_buffer, x, x_buffer);
 }
 
 pub fn cmp(
@@ -98,6 +185,26 @@ test "cmp: lexicographic" {
     const line3 = Line.init(raw[12..20], 12, key, args.separator);
     try std.testing.expectEqual(.lt, cmp(&args, line1, raw, line2, raw));
     try std.testing.expectEqual(.gt, cmp(&args, line2, raw, line1, raw));
+    try std.testing.expectEqual(.eq, cmp(&args, line2, raw, line3, raw));
+}
+
+test "cmp: reverse lexicographic" {
+    const test_gpa = std.testing.allocator;
+    const raw =
+        \\abc
+        \\defghij
+        \\defghij
+        \\
+    ;
+    const key = Key{ .start = 1, .end = 0 };
+    var args = Args{ .keys = &[_]Key{key}, .reverse = true };
+    try args.build_cmp_functions(test_gpa);
+    defer test_gpa.free(args.cmp_functions);
+    const line1 = Line.init(raw[0..4], 0, key, args.separator);
+    const line2 = Line.init(raw[4..12], 4, key, args.separator);
+    const line3 = Line.init(raw[12..20], 12, key, args.separator);
+    try std.testing.expectEqual(.gt, cmp(&args, line1, raw, line2, raw));
+    try std.testing.expectEqual(.lt, cmp(&args, line2, raw, line1, raw));
     try std.testing.expectEqual(.eq, cmp(&args, line2, raw, line3, raw));
 }
 

@@ -73,7 +73,14 @@ pub const Args = struct {
     }
 
     fn parse_key(str: []const u8) !line.Key {
-        var parts = std.mem.splitScalar(u8, str, ',');
+        var reverse: bool = false;
+        var key_str = str;
+        if (str.len > 1 and str[str.len - 1] == 'r') {
+            reverse = true;
+            key_str = key_str[0 .. key_str.len - 1];
+        }
+
+        var parts = std.mem.splitScalar(u8, key_str, ',');
         var start: usize = undefined;
         if (parts.next()) |start_str| {
             start = try std.fmt.parseInt(usize, start_str, 10);
@@ -85,7 +92,7 @@ pub const Args = struct {
             if (start > end) return error.InvalidKey;
             end = end + 1; // make end exclusive
         }
-        return .{ .start = start, .end = end };
+        return .{ .start = start, .end = end, .reverse = reverse };
     }
 
     fn parse_flags(self: *Args, gpa: std.mem.Allocator, argv: []const [:0]u8, i: *usize) !bool {
@@ -184,21 +191,30 @@ pub const Args = struct {
 
     pub fn build_cmp_functions(self: *Args, gpa: std.mem.Allocator) !void {
         var cmp_functions: std.ArrayList(cmp.LineCmp) = .empty;
-        try cmp_functions.append(gpa, .{
-            .key_idx = 0,
-            .cmp_fn = cmp.lexicographic_cmp_cache_key,
-        });
+        try cmp_functions.append(
+            gpa,
+            cmp.LineCmp.init(
+                if (self.keys[0].reverse) .reverse_lexicographic_cache_key else .lexicographic_cache_key,
+                0,
+            ),
+        );
         if (self.keys.len == 1 and self.keys[0].start == 1 and self.keys[0].end == 0) {} else {
             for (1..self.keys.len) |i| {
-                try cmp_functions.append(gpa, .{
-                    .key_idx = i,
-                    .cmp_fn = cmp.lexicographic_cmp_key,
-                });
+                try cmp_functions.append(gpa, cmp.LineCmp.init(
+                    if (self.keys[i].reverse) .reverse_lexicographic_key else .lexicographic_key,
+                    i,
+                ));
             }
-            try cmp_functions.append(gpa, .{
-                .key_idx = self.keys.len - 1,
-                .cmp_fn = cmp.lexicographic_cmp_string,
-            });
+            try cmp_functions.append(gpa, cmp.LineCmp.init(
+                .lexicographic_string,
+                self.keys.len - 1,
+            ));
+        }
+
+        if (self.reverse) {
+            for (cmp_functions.items) |*cmp_function| {
+                cmp_function.set_reverse();
+            }
         }
         self.cmp_functions = try cmp_functions.toOwnedSlice(gpa);
     }

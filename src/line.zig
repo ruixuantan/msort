@@ -1,6 +1,6 @@
 const std = @import("std");
 
-pub const Key = struct { start: usize, end: usize };
+pub const Key = struct { start: usize, end: usize, reverse: bool = false };
 
 pub const Line = struct {
     offset: u32,
