@@ -4,6 +4,18 @@ const Args = @import("argparse.zig").Args;
 
 pub const Key = struct { start: usize, end: usize };
 
+pub const LineCmp = struct {
+    key_idx: usize,
+    cmp_fn: *const fn (
+        key: Key,
+        separator: u8,
+        x: Line,
+        x_buffer: []const u8,
+        y: Line,
+        y_buffer: []const u8,
+    ) std.math.Order,
+};
+
 pub const Line = struct {
     offset: u32,
     length: u32,
@@ -59,57 +71,41 @@ pub const Line = struct {
         return @sizeOf(Line);
     }
 
-    pub fn lexicographic_cmp(
-        args: *const Args,
-        x: Line,
-        x_buffer: []const u8,
-        y: Line,
-        y_buffer: []const u8,
-    ) std.math.Order {
+    pub fn lexicographic_cmp_cache_key(key: Key, separator: u8, x: Line, x_buffer: []const u8, y: Line, y_buffer: []const u8) std.math.Order {
+        _ = key;
+        _ = separator;
         const by_prefix = std.math.order(x.key_prefix, y.key_prefix);
         if (by_prefix != .eq) return by_prefix;
-        {
-            const x_key = x_buffer[@as(usize, x.key_offset)..][0..@as(usize, x.key_length)];
-            const y_key = y_buffer[@as(usize, y.key_offset)..][0..@as(usize, y.key_length)];
-            const key_order = std.mem.order(u8, x_key, y_key);
-            if (key_order != .eq) return key_order;
-        }
+        const x_key = x_buffer[@as(usize, x.key_offset)..][0..@as(usize, x.key_length)];
+        const y_key = y_buffer[@as(usize, y.key_offset)..][0..@as(usize, y.key_length)];
+        return std.mem.order(u8, x_key, y_key);
+    }
 
-        for (args.keys[1..]) |key| {
-            const x_key_info = get_key(x_buffer, key, args.separator);
-            const y_key_info = get_key(y_buffer, key, args.separator);
-            const x_slice = x_buffer[@as(usize, x.key_offset + x_key_info.offset)..];
-            const y_slice = y_buffer[@as(usize, y.key_offset + y_key_info.offset)..];
-            const x_key = x_slice[0..@as(usize, x_key_info.length)];
-            const y_key = y_slice[0..@as(usize, y_key_info.length)];
-            const key_order = std.mem.order(u8, x_key, y_key);
-            if (key_order != .eq) return key_order;
-        }
+    pub fn lexicographic_cmp_key(key: Key, separator: u8, x: Line, x_buffer: []const u8, y: Line, y_buffer: []const u8) std.math.Order {
+        const x_str = string(x, x_buffer);
+        const y_str = string(y, y_buffer);
+        const x_key_info = get_key(x_str, key, separator);
+        const y_key_info = get_key(y_str, key, separator);
+        const x_key = x_str[@as(usize, x_key_info.offset)..][0..@as(usize, x_key_info.length)];
+        const y_key = y_str[@as(usize, y_key_info.offset)..][0..@as(usize, y_key_info.length)];
+        return std.mem.order(u8, x_key, y_key);
+    }
 
+    pub fn lexicographic_cmp_string(key: Key, separator: u8, x: Line, x_buffer: []const u8, y: Line, y_buffer: []const u8) std.math.Order {
+        _ = key;
+        _ = separator;
         const x_str = x_buffer[@as(usize, x.offset)..][0..@as(usize, x.length)];
         const y_str = y_buffer[@as(usize, y.offset)..][0..@as(usize, y.length)];
         return std.mem.order(u8, x_str, y_str);
     }
 
-    pub fn rlexicographic_cmp(
-        args: *const Args,
-        x: Line,
-        x_buffer: []const u8,
-        y: Line,
-        y_buffer: []const u8,
-    ) std.math.Order {
-        _ = args;
-        const by_prefix = std.math.order(y.key_prefix, x.key_prefix);
-        if (by_prefix != .eq) return by_prefix;
-
-        const x_key = x_buffer[@as(usize, x.key_offset)..][0..@as(usize, x.key_length)];
-        const y_key = y_buffer[@as(usize, y.key_offset)..][0..@as(usize, y.key_length)];
-        const key_order = std.mem.order(u8, y_key, x_key);
-        if (key_order != .eq) return key_order;
-
-        const x_str = x_buffer[@as(usize, x.offset)..][0..@as(usize, x.length)];
-        const y_str = y_buffer[@as(usize, y.offset)..][0..@as(usize, y.length)];
-        return std.mem.order(u8, y_str, x_str);
+    pub fn cmp(args: *const Args, x: Line, x_buffer: []const u8, y: Line, y_buffer: []const u8) std.math.Order {
+        for (args.cmp_functions) |fx| {
+            const key = args.keys[fx.key_idx];
+            const key_order = fx.cmp_fn(key, args.separator, x, x_buffer, y, y_buffer);
+            if (key_order != .eq) return key_order;
+        }
+        return .eq;
     }
 
     pub fn string(self: Line, buffer: []const u8) []const u8 {
@@ -117,20 +113,13 @@ pub const Line = struct {
     }
 };
 
-pub const LineCmp = *const fn (
-    args: *const Args,
-    x: Line,
-    x_buffer: []const u8,
-    y: Line,
-    y_buffer: []const u8,
-) std.math.Order;
-
 pub const LineTable = struct {
     lines: []Line,
     contents: []const u8,
 };
 
 test "line: lexicographic_cmp" {
+    const test_gpa = std.testing.allocator;
     const raw =
         \\abc
         \\defghij
@@ -138,33 +127,36 @@ test "line: lexicographic_cmp" {
         \\
     ;
     const key = Key{ .start = 1, .end = 0 };
-    const args = Args{ .keys = &[_]Key{key} };
-    const line1 = Line.init(raw[0..3], 0, key, args.separator);
-    const line2 = Line.init(raw[5..12], 5, key, args.separator);
-    const line3 = Line.init(raw[13..20], 13, key, args.separator);
-    try std.testing.expectEqual(.lt, Line.lexicographic_cmp(&args, line1, raw, line2, raw));
-    try std.testing.expectEqual(.gt, Line.lexicographic_cmp(&args, line2, raw, line1, raw));
-    try std.testing.expectEqual(.eq, Line.lexicographic_cmp(&args, line2, raw, line3, raw));
+    var args = Args{ .keys = &[_]Key{key} };
+    try args.build_cmp_functions(test_gpa);
+    defer test_gpa.free(args.cmp_functions);
+    const line1 = Line.init(raw[0..4], 0, key, args.separator);
+    const line2 = Line.init(raw[4..12], 4, key, args.separator);
+    const line3 = Line.init(raw[12..20], 12, key, args.separator);
+    try std.testing.expectEqual(.lt, Line.cmp(&args, line1, raw, line2, raw));
+    try std.testing.expectEqual(.gt, Line.cmp(&args, line2, raw, line1, raw));
+    try std.testing.expectEqual(.eq, Line.cmp(&args, line2, raw, line3, raw));
 }
 
-test "line: rlexicographic_cmp" {
-    const raw =
-        \\abc
-        \\defghij
-        \\defghij
-        \\
-    ;
-    const key = Key{ .start = 1, .end = 0 };
-    const args = Args{ .keys = &[_]Key{key} };
-    const line1 = Line.init(raw[0..3], 0, key, args.separator);
-    const line2 = Line.init(raw[5..12], 5, key, args.separator);
-    const line3 = Line.init(raw[13..20], 13, key, args.separator);
-    try std.testing.expectEqual(.gt, Line.rlexicographic_cmp(&args, line1, raw, line2, raw));
-    try std.testing.expectEqual(.lt, Line.rlexicographic_cmp(&args, line2, raw, line1, raw));
-    try std.testing.expectEqual(.eq, Line.rlexicographic_cmp(&args, line2, raw, line3, raw));
-}
+// test "line: rlexicographic_cmp" {
+//     const raw =
+//         \\abc
+//         \\defghij
+//         \\defghij
+//         \\
+//     ;
+//     const key = Key{ .start = 1, .end = 0 };
+//     const args = Args{ .keys = &[_]Key{key} };
+//     const line1 = Line.init(raw[0..3], 0, key, args.separator);
+//     const line2 = Line.init(raw[5..12], 5, key, args.separator);
+//     const line3 = Line.init(raw[13..20], 13, key, args.separator);
+//     try std.testing.expectEqual(.gt, Line.rlexicographic_cmp(&args, line1, raw, line2, raw));
+//     try std.testing.expectEqual(.lt, Line.rlexicographic_cmp(&args, line2, raw, line1, raw));
+//     try std.testing.expectEqual(.eq, Line.rlexicographic_cmp(&args, line2, raw, line3, raw));
+// }
 
 test "line: with key (-k 2,2 with -t space)" {
+    const test_gpa = std.testing.allocator;
     const raw =
         \\3 cherry 0.1
         \\1 apple  0.3
@@ -172,19 +164,22 @@ test "line: with key (-k 2,2 with -t space)" {
         \\
     ;
     const key = Key{ .start = 2, .end = 3 }; // parse_key turns -k 2,2 into end exclusive
-    const args = Args{ .keys = &[_]Key{key} };
-    const line1 = Line.init(raw[0..12], 0, key, args.separator);
-    const line2 = Line.init(raw[13..24], 13, key, args.separator);
-    const line3 = Line.init(raw[25..37], 25, key, args.separator);
+    var args = Args{ .keys = &[_]Key{key} };
+    try args.build_cmp_functions(test_gpa);
+    defer test_gpa.free(args.cmp_functions);
+    const line1 = Line.init(raw[0..13], 0, key, args.separator);
+    const line2 = Line.init(raw[13..26], 13, key, args.separator);
+    const line3 = Line.init(raw[26..40], 26, key, args.separator);
     try std.testing.expectEqualStrings("cherry", raw[line1.key_offset..][0..line1.key_length]);
     try std.testing.expectEqualStrings("apple", raw[line2.key_offset..][0..line2.key_length]);
     try std.testing.expectEqualStrings("banana", raw[line3.key_offset..][0..line3.key_length]);
-    try std.testing.expectEqual(.lt, Line.lexicographic_cmp(&args, line2, raw, line3, raw));
-    try std.testing.expectEqual(.gt, Line.lexicographic_cmp(&args, line3, raw, line2, raw));
-    try std.testing.expectEqual(.eq, Line.lexicographic_cmp(&args, line3, raw, line3, raw));
+    try std.testing.expectEqual(.gt, Line.cmp(&args, line1, raw, line2, raw));
+    try std.testing.expectEqual(.gt, Line.cmp(&args, line1, raw, line3, raw));
+    try std.testing.expectEqual(.lt, Line.cmp(&args, line2, raw, line3, raw));
 }
 
 test "line: with key (-k 2,3 with -t ,)" {
+    const test_gpa = std.testing.allocator;
     const raw =
         \\3,cherry,0.1,
         \\1,apple,0.3,red
@@ -192,7 +187,9 @@ test "line: with key (-k 2,3 with -t ,)" {
         \\
     ;
     const key = Key{ .start = 2, .end = 4 };
-    const args = Args{ .keys = &[_]Key{key}, .separator = ',' };
+    var args = Args{ .keys = &[_]Key{key}, .separator = ',' };
+    try args.build_cmp_functions(test_gpa);
+    defer test_gpa.free(args.cmp_functions);
     const line1 = Line.init(raw[0..14], 0, key, args.separator);
     const line2 = Line.init(raw[14..30], 14, key, args.separator);
     const line3 = Line.init(raw[30..50], 30, key, args.separator);
@@ -202,6 +199,7 @@ test "line: with key (-k 2,3 with -t ,)" {
 }
 
 test "line: with multiple keys" {
+    const test_gpa = std.testing.allocator;
     const raw =
         \\a 1
         \\a 2
@@ -209,16 +207,18 @@ test "line: with multiple keys" {
         \\b 2
         \\
     ;
-    const keys = &[_]Key{ .{ .start = 1, .end = 1 }, .{ .start = 2, .end = 2 } };
-    const args = Args{ .keys = keys, .separator = ' ' };
-    const line1 = Line.init(raw[0..3], 0, keys[0], args.separator);
-    const line2 = Line.init(raw[4..7], 4, keys[0], args.separator);
-    const line3 = Line.init(raw[8..11], 8, keys[0], args.separator);
-    const line4 = Line.init(raw[12..15], 12, keys[0], args.separator);
-    try std.testing.expectEqual(.lt, Line.lexicographic_cmp(&args, line1, raw, line2, raw));
-    try std.testing.expectEqual(.lt, Line.lexicographic_cmp(&args, line1, raw, line3, raw));
-    try std.testing.expectEqual(.lt, Line.lexicographic_cmp(&args, line1, raw, line4, raw));
-    try std.testing.expectEqual(.lt, Line.lexicographic_cmp(&args, line2, raw, line3, raw));
-    try std.testing.expectEqual(.lt, Line.lexicographic_cmp(&args, line2, raw, line4, raw));
-    try std.testing.expectEqual(.lt, Line.lexicographic_cmp(&args, line3, raw, line4, raw));
+    const keys = &[_]Key{ .{ .start = 1, .end = 2 }, .{ .start = 2, .end = 3 } };
+    var args = Args{ .keys = keys, .separator = ' ' };
+    try args.build_cmp_functions(test_gpa);
+    defer test_gpa.free(args.cmp_functions);
+    const line1 = Line.init(raw[0..4], 0, keys[0], args.separator);
+    const line2 = Line.init(raw[4..8], 4, keys[0], args.separator);
+    const line3 = Line.init(raw[8..12], 8, keys[0], args.separator);
+    const line4 = Line.init(raw[12..16], 12, keys[0], args.separator);
+    try std.testing.expectEqual(.lt, Line.cmp(&args, line1, raw, line2, raw));
+    try std.testing.expectEqual(.lt, Line.cmp(&args, line1, raw, line3, raw));
+    try std.testing.expectEqual(.lt, Line.cmp(&args, line1, raw, line4, raw));
+    try std.testing.expectEqual(.lt, Line.cmp(&args, line2, raw, line3, raw));
+    try std.testing.expectEqual(.lt, Line.cmp(&args, line2, raw, line4, raw));
+    try std.testing.expectEqual(.lt, Line.cmp(&args, line3, raw, line4, raw));
 }

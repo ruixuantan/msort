@@ -42,19 +42,21 @@ pub const SortAlgorithm = enum {
 };
 
 pub const Args = struct {
-    cmp_algorithm: line.LineCmp = line.Line.lexicographic_cmp,
     keys: []const line.Key = undefined,
     memsize: usize = 8 * 1024 * 1024,
     tmp_dir: []const u8 = "tmp",
     outfile: ?[]const u8 = null,
+    reverse: bool = false,
     separator: u8 = ' ',
     sort_algorithm: SortAlgorithm = .mergesort,
     filenames: ?[]const []const u8 = null,
     delimiter: u8 = '\n',
+    cmp_functions: []const line.LineCmp = undefined,
 
     pub fn deinit(self: Args, gpa: std.mem.Allocator) void {
         if (self.filenames != null) gpa.free(self.filenames.?);
         gpa.free(self.keys);
+        gpa.free(self.cmp_functions);
     }
 
     fn parse_memsize(str: []const u8) !usize {
@@ -115,7 +117,7 @@ pub const Args = struct {
                 if (i.* >= argv.len) return false;
                 self.separator = argv[i.*][0];
             } else if (std.mem.eql(u8, arg, "-r")) {
-                self.cmp_algorithm = line.Line.rlexicographic_cmp;
+                self.reverse = true;
             } else if (std.mem.eql(u8, arg, "--qsort")) {
                 self.sort_algorithm = .quicksort;
             } else {
@@ -177,6 +179,27 @@ pub const Args = struct {
             const stat = try file.stat();
             if (stat.size == 0) try print_usage(writer);
         }
+    }
+
+    pub fn build_cmp_functions(self: *Args, gpa: std.mem.Allocator) !void {
+        var cmp_functions: std.ArrayList(line.LineCmp) = .empty;
+        try cmp_functions.append(gpa, .{
+            .key_idx = 0,
+            .cmp_fn = line.Line.lexicographic_cmp_cache_key,
+        });
+        if (self.keys.len == 1 and self.keys[0].start == 1 and self.keys[0].end == 0) {} else {
+            for (1..self.keys.len) |i| {
+                try cmp_functions.append(gpa, .{
+                    .key_idx = i,
+                    .cmp_fn = line.Line.lexicographic_cmp_key,
+                });
+            }
+            try cmp_functions.append(gpa, .{
+                .key_idx = self.keys.len - 1,
+                .cmp_fn = line.Line.lexicographic_cmp_string,
+            });
+        }
+        self.cmp_functions = try cmp_functions.toOwnedSlice(gpa);
     }
 
     pub fn input_buffer_size(self: Args) usize {

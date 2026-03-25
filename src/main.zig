@@ -25,9 +25,10 @@ pub fn main() !void {
 
     const parsed_args = try msort.Args.parse(gpa, raw_args, &stdout_writer);
     if (parsed_args == null) return;
-    const args = parsed_args.?;
+    var args = parsed_args.?;
     defer args.deinit(gpa);
     try args.validate(&stdout_writer);
+    try args.build_cmp_functions(gpa);
 
     const input_buffer = try gpa.alignedAlloc(u8, null, args.input_buffer_size());
     defer gpa.free(input_buffer);

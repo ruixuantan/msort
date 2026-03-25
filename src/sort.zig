@@ -15,7 +15,7 @@ pub fn insertsort(line_table: LineTable, args: *const Args) void {
     while (i < line_table.lines.len) : (i += 1) {
         const key = line_table.lines[i];
         var j = i;
-        while (j > 0 and args.cmp_algorithm(
+        while (j > 0 and Line.cmp(
             args,
             line_table.lines[j - 1],
             line_table.contents,
@@ -38,7 +38,7 @@ fn merge(
     args: *const Args,
 ) void {
     std.debug.assert(mid <= line_table.lines.len);
-    if (args.cmp_algorithm(
+    if (Line.cmp(
         args,
         line_table.lines[mid - 1],
         line_table.contents,
@@ -49,7 +49,7 @@ fn merge(
     var i: usize = 0;
     var j: usize = mid;
     while (i < mid and j < line_table.lines.len) {
-        if (args.cmp_algorithm(
+        if (Line.cmp(
             args,
             line_table.lines[i],
             line_table.contents,
@@ -137,7 +137,7 @@ pub fn quicksort(
 
     while (true) {
         i += 1;
-        while (args.cmp_algorithm(
+        while (Line.cmp(
             args,
             line_table.lines[@intCast(i)],
             line_table.contents,
@@ -145,7 +145,7 @@ pub fn quicksort(
             line_table.contents,
         ) == .lt) : (i += 1) {}
         j -= 1;
-        while (args.cmp_algorithm(
+        while (Line.cmp(
             args,
             line_table.lines[j],
             line_table.contents,
@@ -171,6 +171,7 @@ pub fn quicksort(
 }
 
 test "insertsort" {
+    const test_gpa = std.testing.allocator;
     const contents =
         \\zebra
         \\apple
@@ -183,7 +184,9 @@ test "insertsort" {
         Line.init(contents[6..11], 6, key, ' '),
         Line.init(contents[12..18], 12, key, ' '),
     };
-    const args = Args{ .keys = &[_]line.Key{.{ .start = 1, .end = 0 }}, .separator = ' ' };
+    var args = Args{ .keys = &[_]line.Key{.{ .start = 1, .end = 0 }}, .separator = ' ' };
+    try args.build_cmp_functions(test_gpa);
+    defer test_gpa.free(args.cmp_functions);
     insertsort(.{ .lines = &lines, .contents = contents }, &args);
     try std.testing.expectEqualStrings("apple", lines[0].string(contents));
     try std.testing.expectEqualStrings("banana", lines[1].string(contents));
@@ -197,7 +200,9 @@ test "mergesort" {
     for (0..26) |i| {
         lines[i] = Line.init(contents[i .. i + 1], i, .{ .start = 1, .end = 0 }, ' ');
     }
-    const args = Args{ .keys = &[_]line.Key{.{ .start = 1, .end = 0 }}, .separator = ' ' };
+    var args = Args{ .keys = &[_]line.Key{.{ .start = 1, .end = 0 }}, .separator = ' ' };
+    try args.build_cmp_functions(test_gpa);
+    defer test_gpa.free(args.cmp_functions);
     try mergesort(test_gpa, .{ .lines = &lines, .contents = contents }, &args);
     for (0..26) |k| {
         try std.testing.expectEqual(@as(u8, @intCast('a' + k)), lines[k].string(contents)[0]);
@@ -205,12 +210,15 @@ test "mergesort" {
 }
 
 test "quicksort" {
+    const test_gpa = std.testing.allocator;
     const contents = "qazwsxedcrfvtgbyhnujmikolp";
     var lines: [26]Line = undefined;
     for (0..26) |i| {
         lines[i] = Line.init(contents[i .. i + 1], i, .{ .start = 1, .end = 0 }, ' ');
     }
-    const args = Args{ .keys = &[_]line.Key{.{ .start = 1, .end = 0 }}, .separator = ' ' };
+    var args = Args{ .keys = &[_]line.Key{.{ .start = 1, .end = 0 }}, .separator = ' ' };
+    try args.build_cmp_functions(test_gpa);
+    defer test_gpa.free(args.cmp_functions);
     try quicksort(.{ .lines = &lines, .contents = contents }, &args, 0);
     for (0..26) |k| {
         try std.testing.expectEqual(@as(u8, @intCast('a' + k)), lines[k].string(contents)[0]);

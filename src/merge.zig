@@ -18,10 +18,8 @@ pub const Merge = struct {
     fn compare(ctx: HeapContext, a: HeapNode, b: HeapNode) std.math.Order {
         const a_line = line.Line.init(a.string, 0, ctx.args.keys[0], ctx.args.separator);
         const b_line = line.Line.init(b.string, 0, ctx.args.keys[0], ctx.args.separator);
-        const key_order = ctx.args.cmp_algorithm(ctx.args, a_line, a.string, b_line, b.string);
-        if (key_order != .eq) {
-            return key_order;
-        }
+        const key_order = line.Line.cmp(ctx.args, a_line, a.string, b_line, b.string);
+        if (key_order != .eq) return key_order;
         return std.math.order(a.run_idx, b.run_idx);
     }
 
@@ -112,10 +110,12 @@ pub const Merge = struct {
 
 test "Merge: kway" {
     const test_gpa = std.testing.allocator;
-    const args = Args{
+    var args = Args{
         .tmp_dir = "test_data/tmp",
         .keys = &[_]line.Key{.{ .start = 1, .end = 0 }},
     };
+    try args.build_cmp_functions(test_gpa);
+    defer test_gpa.free(args.cmp_functions);
     const buffer = try test_gpa.alloc(u8, 50);
     defer test_gpa.free(buffer);
 
