@@ -1,6 +1,6 @@
 const std = @import("std");
 
-pub const Key = struct { start: usize, end: usize, reverse: bool = false };
+pub const Key = struct { start: usize, end: usize, reverse: bool = false, numeric: bool = false };
 
 pub const Line = struct {
     offset: u32,
@@ -9,8 +9,11 @@ pub const Line = struct {
     key_length: u32,
     key_prefix: u32,
 
-    pub fn get_key(raw: []const u8, key: Key, separator: u8) struct { offset: usize, length: usize } {
-        if (key.start == 1 and key.end == 0) return .{ .offset = 0, .length = raw.len };
+    pub fn get_key(
+        raw: []const u8,
+        key: Key,
+        separator: u8,
+    ) struct { offset: usize, length: usize } {
         var i: usize = 0;
         var field: usize = 1;
         while (field < key.start) : (field += 1) {
@@ -37,18 +40,24 @@ pub const Line = struct {
     }
 
     pub fn init(raw: []const u8, offset: usize, key: Key, separator: u8) Line {
-        const key_info = get_key(raw, key, separator);
+        var key_offset: usize = 0;
+        var key_length: usize = raw.len;
+        if (key.start != 1 or key.end != 0) {
+            const key_info = get_key(raw, key, separator);
+            key_offset = key_info.offset;
+            key_length = key_info.length;
+        }
 
         var prefix_bytes: [4]u8 = .{ 0, 0, 0, 0 };
-        const n = @min(key_info.length, 4);
-        @memcpy(prefix_bytes[0..n], raw[key_info.offset..][0..n]);
+        const n = @min(key_length, 4);
+        @memcpy(prefix_bytes[0..n], raw[key_offset..][0..n]);
         const key_prefix = std.mem.readInt(u32, &prefix_bytes, .big);
 
         return .{
             .offset = @intCast(offset),
             .length = @intCast(raw.len),
-            .key_offset = @intCast(offset + key_info.offset),
-            .key_length = @intCast(key_info.length),
+            .key_offset = @intCast(offset + key_offset),
+            .key_length = @intCast(key_length),
             .key_prefix = key_prefix,
         };
     }

@@ -5,13 +5,89 @@ const line = @import("line.zig");
 const Key = line.Key;
 const Line = line.Line;
 
-const CmpType = enum {
-    lexicographic_cache_key,
-    lexicographic_key,
-    lexicographic_string,
-    reverse_lexicographic_cache_key,
-    reverse_lexicographic_key,
-    reverse_lexicographic_string,
+const Number = struct {
+    sign: i8,
+    int_start: u32,
+    int_length: u32,
+    frac_start: u32,
+    frac_length: u32,
+
+    pub fn get_number(str: []const u8) Number {
+        var i: usize = 0;
+        while (i < str.len and std.ascii.isWhitespace(str[i])) : (i += 1) {}
+        var sign: i8 = 1;
+        if (i < str.len) {
+            if (str[i] == '-') {
+                sign = -1;
+                i += 1;
+            } else if (str[i] == '+') i += 1;
+        }
+
+        var int_start = i;
+        while (i < str.len and std.ascii.isDigit(str[i])) : (i += 1) {}
+        const int_end = i;
+        while (int_start < int_end and str[int_start] == '0') : (int_start += 1) {}
+        const int_length = int_end - int_start;
+
+        var frac_start: usize = i;
+        var frac_length: usize = 0;
+
+        if (i < str.len and str[i] == '.') {
+            i += 1;
+            frac_start = i;
+
+            while (i < str.len and std.ascii.isDigit(str[i])) : (i += 1) {}
+            frac_length = i - frac_start;
+        }
+
+        return .{
+            .sign = sign,
+            .int_start = @intCast(int_start),
+            .int_length = @intCast(int_length),
+            .frac_start = @intCast(frac_start),
+            .frac_length = @intCast(frac_length),
+        };
+    }
+
+    pub fn cmp(x: Number, x_str: []const u8, y: Number, y_str: []const u8) std.math.Order {
+        if (x.sign != y.sign) return std.math.order(x.sign, y.sign);
+        if (x.int_length != y.int_length) return std.math.order(x.int_length, y.int_length);
+
+        const x_int = x_str[@as(usize, x.int_start)..][0..@as(usize, x.int_length)];
+        const y_int = y_str[@as(usize, y.int_start)..][0..@as(usize, y.int_length)];
+        const int_order = std.mem.order(u8, x_int, y_int);
+        if (int_order != .eq) return int_order;
+
+        const x_frac = x_str[@as(usize, x.frac_start)..][0..@as(usize, x.frac_length)];
+        const y_frac = y_str[@as(usize, y.frac_start)..][0..@as(usize, y.frac_length)];
+        const n = @min(x_frac.len, y_frac.len);
+        const prefix_order = std.mem.order(u8, x_frac[0..n], y_frac[0..n]);
+        if (prefix_order != .eq) return prefix_order;
+        if (x_frac.len == y_frac.len) return .eq;
+
+        const longer_frac = if (x_frac.len > y_frac.len) x_frac else y_frac;
+        const remainder = longer_frac[n..];
+
+        for (remainder) |c| {
+            if (c != '0') {
+                return if (x_str.len > y_str.len) .gt else .lt;
+            }
+        }
+        return .eq;
+    }
+};
+
+pub const CmpType = enum {
+    lexicographic_cache,
+    lexicographic,
+    lexicographic_full,
+    reverse_lexicographic_cache,
+    reverse_lexicographic,
+    reverse_lexicographic_full,
+    numeric_cache,
+    reverse_numeric_cache,
+    numeric,
+    reverse_numeric,
 };
 
 pub const LineCmp = struct {
@@ -31,47 +107,67 @@ pub const LineCmp = struct {
             .cmp_type = cmp_type,
             .key_idx = key_idx,
             .cmp_fn = switch (cmp_type) {
-                .lexicographic_cache_key => lexicographic_cmp_cache_key,
-                .lexicographic_key => lexicographic_cmp_key,
-                .lexicographic_string => lexicographic_cmp_string,
-                .reverse_lexicographic_cache_key => rlexicographic_cmp_cache_key,
-                .reverse_lexicographic_key => rlexicographic_cmp_key,
-                .reverse_lexicographic_string => rlexicographic_cmp_string,
+                .lexicographic_cache => lexicographic_cache_cmp,
+                .lexicographic => lexicographic_cmp,
+                .lexicographic_full => lexicographic_full_cmp,
+                .reverse_lexicographic_cache => rlexicographic_cache_cmp,
+                .reverse_lexicographic => rlexicographic_cmp,
+                .reverse_lexicographic_full => rlexicographic_full_cmp,
+                .numeric_cache => numeric_cache_cmp,
+                .numeric => numeric_cmp,
+                .reverse_numeric_cache => rnumeric_cache_cmp,
+                .reverse_numeric => rnumeric_cmp,
             },
         };
     }
 
     pub fn set_reverse(self: *LineCmp) void {
         switch (self.cmp_type) {
-            .lexicographic_cache_key => {
-                self.cmp_type = .reverse_lexicographic_cache_key;
-                self.cmp_fn = rlexicographic_cmp_cache_key;
+            .lexicographic_cache => {
+                self.cmp_type = .reverse_lexicographic_cache;
+                self.cmp_fn = rlexicographic_cache_cmp;
             },
-            .lexicographic_key => {
-                self.cmp_type = .reverse_lexicographic_key;
-                self.cmp_fn = rlexicographic_cmp_key;
+            .lexicographic => {
+                self.cmp_type = .reverse_lexicographic;
+                self.cmp_fn = rlexicographic_cmp;
             },
-            .lexicographic_string => {
-                self.cmp_type = .reverse_lexicographic_string;
-                self.cmp_fn = rlexicographic_cmp_string;
+            .lexicographic_full => {
+                self.cmp_type = .reverse_lexicographic_full;
+                self.cmp_fn = rlexicographic_full_cmp;
             },
-            .reverse_lexicographic_cache_key => {
-                self.cmp_type = .lexicographic_cache_key;
-                self.cmp_fn = lexicographic_cmp_cache_key;
+            .reverse_lexicographic_cache => {
+                self.cmp_type = .lexicographic_cache;
+                self.cmp_fn = lexicographic_cache_cmp;
             },
-            .reverse_lexicographic_key => {
-                self.cmp_type = .lexicographic_key;
-                self.cmp_fn = lexicographic_cmp_key;
+            .reverse_lexicographic => {
+                self.cmp_type = .lexicographic;
+                self.cmp_fn = lexicographic_cmp;
             },
-            .reverse_lexicographic_string => {
-                self.cmp_type = .lexicographic_string;
-                self.cmp_fn = lexicographic_cmp_string;
+            .reverse_lexicographic_full => {
+                self.cmp_type = .lexicographic_full;
+                self.cmp_fn = lexicographic_full_cmp;
+            },
+            .numeric_cache => {
+                self.cmp_type = .reverse_numeric_cache;
+                self.cmp_fn = rnumeric_cache_cmp;
+            },
+            .reverse_numeric_cache => {
+                self.cmp_type = .numeric_cache;
+                self.cmp_fn = numeric_cache_cmp;
+            },
+            .numeric => {
+                self.cmp_type = .reverse_numeric;
+                self.cmp_fn = rnumeric_cmp;
+            },
+            .reverse_numeric => {
+                self.cmp_type = .numeric;
+                self.cmp_fn = numeric_cmp;
             },
         }
     }
 };
 
-pub fn lexicographic_cmp_cache_key(
+pub fn lexicographic_cache_cmp(
     key: Key,
     separator: u8,
     x: Line,
@@ -88,7 +184,7 @@ pub fn lexicographic_cmp_cache_key(
     return std.mem.order(u8, x_key, y_key);
 }
 
-pub fn rlexicographic_cmp_cache_key(
+pub fn rlexicographic_cache_cmp(
     key: Key,
     separator: u8,
     x: Line,
@@ -96,10 +192,10 @@ pub fn rlexicographic_cmp_cache_key(
     y: Line,
     y_buffer: []const u8,
 ) std.math.Order {
-    return lexicographic_cmp_cache_key(key, separator, y, y_buffer, x, x_buffer);
+    return lexicographic_cache_cmp(key, separator, y, y_buffer, x, x_buffer);
 }
 
-pub fn lexicographic_cmp_key(
+pub fn lexicographic_cmp(
     key: Key,
     separator: u8,
     x: Line,
@@ -116,7 +212,7 @@ pub fn lexicographic_cmp_key(
     return std.mem.order(u8, x_key, y_key);
 }
 
-pub fn rlexicographic_cmp_key(
+pub fn rlexicographic_cmp(
     key: Key,
     separator: u8,
     x: Line,
@@ -124,10 +220,10 @@ pub fn rlexicographic_cmp_key(
     y: Line,
     y_buffer: []const u8,
 ) std.math.Order {
-    return lexicographic_cmp_key(key, separator, y, y_buffer, x, x_buffer);
+    return lexicographic_cmp(key, separator, y, y_buffer, x, x_buffer);
 }
 
-pub fn lexicographic_cmp_string(
+pub fn lexicographic_full_cmp(
     key: Key,
     separator: u8,
     x: Line,
@@ -142,7 +238,7 @@ pub fn lexicographic_cmp_string(
     return std.mem.order(u8, x_str, y_str);
 }
 
-pub fn rlexicographic_cmp_string(
+pub fn rlexicographic_full_cmp(
     key: Key,
     separator: u8,
     x: Line,
@@ -150,7 +246,65 @@ pub fn rlexicographic_cmp_string(
     y: Line,
     y_buffer: []const u8,
 ) std.math.Order {
-    return lexicographic_cmp_string(key, separator, y, y_buffer, x, x_buffer);
+    return lexicographic_full_cmp(key, separator, y, y_buffer, x, x_buffer);
+}
+
+pub fn numeric_cache_cmp(
+    key: Key,
+    separator: u8,
+    x: Line,
+    x_buffer: []const u8,
+    y: Line,
+    y_buffer: []const u8,
+) std.math.Order {
+    _ = key;
+    _ = separator;
+    const x_key = x_buffer[@as(usize, x.key_offset)..][0..@as(usize, x.key_length)];
+    const y_key = y_buffer[@as(usize, y.key_offset)..][0..@as(usize, y.key_length)];
+    const x_number = Number.get_number(x_key);
+    const y_number = Number.get_number(y_key);
+    return Number.cmp(x_number, x_key, y_number, y_key);
+}
+
+pub fn rnumeric_cache_cmp(
+    key: Key,
+    separator: u8,
+    x: Line,
+    x_buffer: []const u8,
+    y: Line,
+    y_buffer: []const u8,
+) std.math.Order {
+    return numeric_cache_cmp(key, separator, y, y_buffer, x, x_buffer);
+}
+
+pub fn numeric_cmp(
+    key: Key,
+    separator: u8,
+    x: Line,
+    x_buffer: []const u8,
+    y: Line,
+    y_buffer: []const u8,
+) std.math.Order {
+    const x_str = x.string(x_buffer);
+    const y_str = y.string(y_buffer);
+    const x_key_info = Line.get_key(x_str, key, separator);
+    const y_key_info = Line.get_key(y_str, key, separator);
+    const x_key = x_str[@as(usize, x_key_info.offset)..][0..@as(usize, x_key_info.length)];
+    const y_key = y_str[@as(usize, y_key_info.offset)..][0..@as(usize, y_key_info.length)];
+    const x_number = Number.get_number(x_key);
+    const y_number = Number.get_number(y_key);
+    return Number.cmp(x_number, x_key, y_number, y_key);
+}
+
+pub fn rnumeric_cmp(
+    key: Key,
+    separator: u8,
+    x: Line,
+    x_buffer: []const u8,
+    y: Line,
+    y_buffer: []const u8,
+) std.math.Order {
+    return numeric_cmp(key, separator, y, y_buffer, x, x_buffer);
 }
 
 pub fn cmp(
@@ -206,6 +360,37 @@ test "cmp: reverse lexicographic" {
     try std.testing.expectEqual(.gt, cmp(&args, line1, raw, line2, raw));
     try std.testing.expectEqual(.lt, cmp(&args, line2, raw, line1, raw));
     try std.testing.expectEqual(.eq, cmp(&args, line2, raw, line3, raw));
+}
+
+test "cmp: numeric" {
+    const test_gpa = std.testing.allocator;
+    const raw =
+        \\0.1
+        \\  0.1
+        \\1
+        \\1.0
+        \\02
+        \\
+    ;
+    const key = Key{ .start = 1, .end = 0 };
+    var args = Args{ .keys = &[_]Key{key}, .numeric = true };
+    try args.build_cmp_functions(test_gpa);
+    defer test_gpa.free(args.cmp_functions);
+    const line1 = Line.init(raw[0..4], 0, key, args.separator);
+    const line2 = Line.init(raw[4..10], 4, key, args.separator);
+    const line3 = Line.init(raw[10..12], 10, key, args.separator);
+    const line4 = Line.init(raw[12..16], 12, key, args.separator);
+    const line5 = Line.init(raw[16..18], 16, key, args.separator);
+    try std.testing.expectEqual(.eq, cmp(&args, line1, raw, line2, raw));
+    try std.testing.expectEqual(.lt, cmp(&args, line1, raw, line3, raw));
+    try std.testing.expectEqual(.lt, cmp(&args, line1, raw, line4, raw));
+    try std.testing.expectEqual(.lt, cmp(&args, line1, raw, line5, raw));
+    try std.testing.expectEqual(.lt, cmp(&args, line2, raw, line3, raw));
+    try std.testing.expectEqual(.lt, cmp(&args, line2, raw, line4, raw));
+    try std.testing.expectEqual(.lt, cmp(&args, line2, raw, line5, raw));
+    try std.testing.expectEqual(.eq, cmp(&args, line3, raw, line4, raw));
+    try std.testing.expectEqual(.lt, cmp(&args, line3, raw, line5, raw));
+    try std.testing.expectEqual(.lt, cmp(&args, line4, raw, line5, raw));
 }
 
 test "cmp: with key (-k 2,2 with -t space)" {

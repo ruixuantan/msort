@@ -10,14 +10,15 @@ fn print_version(writer: *std.fs.File.Writer) !void {
 
 fn print_usage(writer: *std.fs.File.Writer) !void {
     const usage =
-        \\Usage: msort [-kPOS1[,POS2] ... ] [-S memsize] [-T tmpdir] [-o outfile] [-r] [-t separator] [--qsort] [file ...]
+        \\Usage: msort [-S memsize] [-T tmpdir] [-kPOS1[,POS2] ... ] [-n numeric] [-o outfile] [-r reverse] [-t separator] [--qsort] [file ...]
         \\
         \\Mini sort implementation in Zig, defaulting to lexicographic order merge sort.
         \\
         \\Options:
-        \\  -k          Key positions to sort by. Positions are 1-indexed and separated by commas
         \\  -S          Maximum memory size used to run msort. Units: K,M,G
         \\  -T          Write temporary files to specified directory, if sort file does not fit in memory
+        \\  -k          Key positions to sort by. Positions are 1-indexed and separated by commas
+        \\  -n          Use numeric comparison for sorting
         \\  -o          Write output to file, instead of stdout
         \\  -r          Reverse the order of the sort
         \\  -t          Use specified separator for fields
@@ -43,9 +44,10 @@ pub const SortAlgorithm = enum {
 };
 
 pub const Args = struct {
-    keys: []const line.Key = undefined,
     memsize: usize = 8 * 1024 * 1024,
     tmp_dir: []const u8 = "tmp",
+    keys: []const line.Key = undefined,
+    numeric: bool = false,
     outfile: ?[]const u8 = null,
     reverse: bool = false,
     separator: u8 = ' ',
@@ -74,10 +76,19 @@ pub const Args = struct {
 
     fn parse_key(str: []const u8) !line.Key {
         var reverse: bool = false;
+        var numeric: bool = false;
         var key_str = str;
-        if (str.len > 1 and str[str.len - 1] == 'r') {
-            reverse = true;
-            key_str = key_str[0 .. key_str.len - 1];
+        var i: usize = key_str.len - 1;
+        while (i > 0) : (i -= 1) {
+            if (key_str[i] == 'r') {
+                reverse = true;
+                key_str = key_str[0..i];
+            } else if (key_str[i] == 'n') {
+                numeric = true;
+                key_str = key_str[0..i];
+            } else {
+                break;
+            }
         }
 
         var parts = std.mem.splitScalar(u8, key_str, ',');
@@ -92,7 +103,7 @@ pub const Args = struct {
             if (start > end) return error.InvalidKey;
             end = end + 1; // make end exclusive
         }
-        return .{ .start = start, .end = end, .reverse = reverse };
+        return .{ .start = start, .end = end, .reverse = reverse, .numeric = numeric };
     }
 
     fn parse_flags(self: *Args, gpa: std.mem.Allocator, argv: []const [:0]u8, i: *usize) !bool {
@@ -116,6 +127,8 @@ pub const Args = struct {
                 i.* += 1;
                 if (i.* >= argv.len) return false;
                 self.tmp_dir = argv[i.*];
+            } else if (std.mem.eql(u8, arg, "-n")) {
+                self.numeric = true;
             } else if (std.mem.eql(u8, arg, "-o")) {
                 i.* += 1;
                 if (i.* >= argv.len) return false;
@@ -189,26 +202,42 @@ pub const Args = struct {
         }
     }
 
+    fn get_cmp_fn(key_idx: usize, key: line.Key) cmp.LineCmp {
+        var cmp_type: cmp.CmpType = undefined;
+        if (key_idx == 0) {
+            cmp_type = .lexicographic_cache;
+            if (key.numeric) cmp_type = .numeric_cache;
+        } else {
+            cmp_type = .lexicographic;
+            if (key.numeric) cmp_type = .numeric;
+        }
+        var cmp_function = cmp.LineCmp.init(cmp_type, key_idx);
+        if (key.reverse) cmp_function.set_reverse();
+        return cmp_function;
+    }
+
     pub fn build_cmp_functions(self: *Args, gpa: std.mem.Allocator) !void {
+        if (self.keys.len == 0) return;
         var cmp_functions: std.ArrayList(cmp.LineCmp) = .empty;
-        try cmp_functions.append(
-            gpa,
-            cmp.LineCmp.init(
-                if (self.keys[0].reverse) .reverse_lexicographic_cache_key else .lexicographic_cache_key,
-                0,
-            ),
-        );
+        if (self.keys.len == 1 and self.numeric) {
+            try cmp_functions.append(gpa, get_cmp_fn(0, .{
+                .start = self.keys[0].start,
+                .end = self.keys[0].end,
+                .reverse = self.keys[0].reverse,
+                .numeric = true,
+            }));
+        } else {
+            try cmp_functions.append(gpa, get_cmp_fn(0, self.keys[0]));
+        }
+
         if (self.keys.len == 1 and self.keys[0].start == 1 and self.keys[0].end == 0) {} else {
             for (1..self.keys.len) |i| {
-                try cmp_functions.append(gpa, cmp.LineCmp.init(
-                    if (self.keys[i].reverse) .reverse_lexicographic_key else .lexicographic_key,
-                    i,
-                ));
+                try cmp_functions.append(gpa, get_cmp_fn(i, self.keys[i]));
             }
-            try cmp_functions.append(gpa, cmp.LineCmp.init(
-                .lexicographic_string,
-                self.keys.len - 1,
-            ));
+            try cmp_functions.append(
+                gpa,
+                get_cmp_fn(self.keys.len - 1, self.keys[self.keys.len - 1]),
+            );
         }
 
         if (self.reverse) {
