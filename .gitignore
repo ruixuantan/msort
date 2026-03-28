@@ -7,3 +7,5 @@ data/
 
 .zig-cache/
 zig-out/
+
+benchmark/__pycache__/
