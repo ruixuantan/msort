@@ -63,7 +63,7 @@ const Number = struct {
         const n = @min(x_frac.len, y_frac.len);
         const prefix_order = std.mem.order(u8, x_frac[0..n], y_frac[0..n]);
         if (prefix_order != .eq) return prefix_order;
-        if (x_frac.len == y_frac.len) return .eq;
+        if (x_frac.len == y_frac.len) return std.mem.order(u8, x_str, y_str);
 
         const longer_frac = if (x_frac.len > y_frac.len) x_frac else y_frac;
         const remainder = longer_frac[n..];
@@ -73,7 +73,7 @@ const Number = struct {
                 return if (x_str.len > y_str.len) .gt else .lt;
             }
         }
-        return .eq;
+        return std.mem.order(u8, x_str, y_str);
     }
 };
 
@@ -370,6 +370,7 @@ test "cmp: numeric" {
         \\1
         \\1.0
         \\02
+        \\2
         \\
     ;
     const key = Key{ .start = 1, .end = 0 };
@@ -380,17 +381,19 @@ test "cmp: numeric" {
     const line2 = Line.init(raw[4..10], 4, key, args.separator);
     const line3 = Line.init(raw[10..12], 10, key, args.separator);
     const line4 = Line.init(raw[12..16], 12, key, args.separator);
-    const line5 = Line.init(raw[16..18], 16, key, args.separator);
-    try std.testing.expectEqual(.eq, cmp(&args, line1, raw, line2, raw));
+    const line5 = Line.init(raw[16..19], 16, key, args.separator);
+    const line6 = Line.init(raw[19..21], 19, key, args.separator);
+    try std.testing.expectEqual(.gt, cmp(&args, line1, raw, line2, raw));
     try std.testing.expectEqual(.lt, cmp(&args, line1, raw, line3, raw));
     try std.testing.expectEqual(.lt, cmp(&args, line1, raw, line4, raw));
     try std.testing.expectEqual(.lt, cmp(&args, line1, raw, line5, raw));
     try std.testing.expectEqual(.lt, cmp(&args, line2, raw, line3, raw));
     try std.testing.expectEqual(.lt, cmp(&args, line2, raw, line4, raw));
     try std.testing.expectEqual(.lt, cmp(&args, line2, raw, line5, raw));
-    try std.testing.expectEqual(.eq, cmp(&args, line3, raw, line4, raw));
+    try std.testing.expectEqual(.lt, cmp(&args, line3, raw, line4, raw));
     try std.testing.expectEqual(.lt, cmp(&args, line3, raw, line5, raw));
     try std.testing.expectEqual(.lt, cmp(&args, line4, raw, line5, raw));
+    try std.testing.expectEqual(.lt, cmp(&args, line5, raw, line6, raw));
 }
 
 test "cmp: with key (-k 2,2 with -t space)" {

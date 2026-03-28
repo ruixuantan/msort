@@ -2,6 +2,7 @@ const std = @import("std");
 const Args = @import("argparse.zig").Args;
 const Line = @import("line.zig").Line;
 const LineTable = @import("line.zig").LineTable;
+const cmp = @import("cmp.zig").cmp;
 
 pub const Output = struct {
     gpa: std.mem.Allocator,
@@ -44,9 +45,42 @@ pub const Output = struct {
         try writer.interface.flush();
     }
 
+    fn write_unique_lines(
+        self: *Output,
+        writer: *std.fs.File.Writer,
+        line_table: LineTable,
+    ) !void {
+        var prev = line_table.lines[0];
+        var string = prev.string(line_table.contents);
+        var buf_size: usize = string.len + 1;
+        try writer.interface.writeAll(string);
+        try writer.interface.writeByte(self.args.delimiter);
+
+        for (line_table.lines[1..]) |line| {
+            string = line.string(line_table.contents);
+            if (buf_size + string.len + 1 > self.buffer.len) {
+                @branchHint(.unlikely);
+                try writer.interface.flush();
+                buf_size = 0;
+            }
+            if (cmp(self.args, prev, line_table.contents, line, line_table.contents) == .eq) {
+                continue;
+            }
+            prev = line;
+            buf_size += string.len + 1;
+            try writer.interface.writeAll(string);
+            try writer.interface.writeByte(self.args.delimiter);
+        }
+        try writer.interface.flush();
+    }
+
     pub fn write_to_file(self: *Output, line_table: LineTable) !void {
         var writer = try self.get_writer();
-        try self.write_lines(&writer, line_table);
+        if (self.args.unique) {
+            try self.write_unique_lines(&writer, line_table);
+        } else {
+            try self.write_lines(&writer, line_table);
+        }
     }
 
     pub fn create_tmp_dir(self: *Output) !void {
@@ -70,6 +104,10 @@ pub const Output = struct {
         );
         defer self.gpa.free(tmp_file_name);
         var writer = (try std.fs.cwd().createFile(tmp_file_name, .{})).writer(self.buffer);
-        try self.write_lines(&writer, line_table);
+        if (self.args.unique) {
+            try self.write_unique_lines(&writer, line_table);
+        } else {
+            try self.write_lines(&writer, line_table);
+        }
     }
 };

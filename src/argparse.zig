@@ -10,7 +10,7 @@ fn print_version(writer: *std.fs.File.Writer) !void {
 
 fn print_usage(writer: *std.fs.File.Writer) !void {
     const usage =
-        \\Usage: msort [-S memsize] [-T tmpdir] [-kPOS1[,POS2] ... ] [-n numeric] [-o outfile] [-r reverse] [-t separator] [--qsort] [file ...]
+        \\Usage: msort [-S memsize] [-T tmpdir] [-kPOS1[,POS2] ... ] [-n numeric] [-o outfile] [-r reverse] [-t separator] [-u unique] [--qsort] [file ...]
         \\
         \\Mini sort implementation in Zig, defaulting to lexicographic order merge sort.
         \\
@@ -22,6 +22,7 @@ fn print_usage(writer: *std.fs.File.Writer) !void {
         \\  -o          Write output to file, instead of stdout
         \\  -r          Reverse the order of the sort
         \\  -t          Use specified separator for fields
+        \\  -u          Removes duplicate lines
         \\
         \\Other options:
         \\  --qsort     Use quicksort algorithm
@@ -51,6 +52,7 @@ pub const Args = struct {
     outfile: ?[]const u8 = null,
     reverse: bool = false,
     separator: u8 = ' ',
+    unique: bool = false,
     sort_algorithm: SortAlgorithm = .mergesort,
     filenames: ?[]const []const u8 = null,
     delimiter: u8 = '\n',
@@ -114,12 +116,7 @@ pub const Args = struct {
             const arg = argv[i.*];
             if (arg.len == 0 or arg[0] != '-') break;
 
-            if (std.mem.eql(u8, arg, "-k")) {
-                i.* += 1;
-                if (i.* >= argv.len) return false;
-                const key_str = argv[i.*];
-                try keys.append(gpa, parse_key(key_str) catch return false);
-            } else if (std.mem.eql(u8, arg, "-S")) {
+            if (std.mem.eql(u8, arg, "-S")) {
                 i.* += 1;
                 if (i.* >= argv.len) return false;
                 self.memsize = parse_memsize(argv[i.*]) catch return false;
@@ -127,18 +124,25 @@ pub const Args = struct {
                 i.* += 1;
                 if (i.* >= argv.len) return false;
                 self.tmp_dir = argv[i.*];
+            } else if (std.mem.eql(u8, arg, "-k")) {
+                i.* += 1;
+                if (i.* >= argv.len) return false;
+                const key_str = argv[i.*];
+                try keys.append(gpa, parse_key(key_str) catch return false);
             } else if (std.mem.eql(u8, arg, "-n")) {
                 self.numeric = true;
             } else if (std.mem.eql(u8, arg, "-o")) {
                 i.* += 1;
                 if (i.* >= argv.len) return false;
                 self.outfile = argv[i.*];
+            } else if (std.mem.eql(u8, arg, "-r")) {
+                self.reverse = true;
             } else if (std.mem.eql(u8, arg, "-t")) {
                 i.* += 1;
                 if (i.* >= argv.len) return false;
                 self.separator = argv[i.*][0];
-            } else if (std.mem.eql(u8, arg, "-r")) {
-                self.reverse = true;
+            } else if (std.mem.eql(u8, arg, "-u")) {
+                self.unique = true;
             } else if (std.mem.eql(u8, arg, "--qsort")) {
                 self.sort_algorithm = .quicksort;
             } else {
@@ -234,10 +238,12 @@ pub const Args = struct {
             for (1..self.keys.len) |i| {
                 try cmp_functions.append(gpa, get_cmp_fn(i, self.keys[i]));
             }
-            try cmp_functions.append(
-                gpa,
-                get_cmp_fn(self.keys.len - 1, self.keys[self.keys.len - 1]),
-            );
+            if (!self.unique) {
+                try cmp_functions.append(
+                    gpa,
+                    get_cmp_fn(self.keys.len - 1, self.keys[self.keys.len - 1]),
+                );
+            }
         }
 
         if (self.reverse) {
