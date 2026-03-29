@@ -241,7 +241,7 @@ pub const Args = struct {
             if (!self.unique) {
                 try cmp_functions.append(
                     gpa,
-                    get_cmp_fn(self.keys.len - 1, self.keys[self.keys.len - 1]),
+                    cmp.LineCmp.init(.lexicographic_full, self.keys.len - 1),
                 );
             }
         }

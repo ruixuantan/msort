@@ -1,6 +1,8 @@
 *.DS_Store
 
 crap
+bench.csv
+bench_summary.csv
 
 data/
 *.out
@@ -9,3 +11,4 @@ data/
 zig-out/
 
 benchmark/__pycache__/
+venv/
