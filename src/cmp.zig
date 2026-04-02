@@ -203,13 +203,28 @@ pub fn lexicographic_cmp(
     y: Line,
     y_buffer: []const u8,
 ) std.math.Order {
-    const x_str = Line.string(x, x_buffer);
-    const y_str = Line.string(y, y_buffer);
-    const x_key_info = Line.get_key(x_str, key, separator);
-    const y_key_info = Line.get_key(y_str, key, separator);
-    const x_key = x_str[@as(usize, x_key_info.offset)..][0..@as(usize, x_key_info.length)];
-    const y_key = y_str[@as(usize, y_key_info.offset)..][0..@as(usize, y_key_info.length)];
-    return std.mem.order(u8, x_key, y_key);
+    const x_str = x.string(x_buffer);
+    const y_str = y.string(y_buffer);
+    var x_start = Line.get_key_start_offset(x_str, key, separator);
+    var y_start = Line.get_key_start_offset(y_str, key, separator);
+    var x_field = key.start;
+    var y_field = key.start;
+
+    const n = @min(x_str.len, y_str.len);
+    const field_end = if (key.end == 0) n else key.end;
+    while (x_start < x_str.len and y_start < y_str.len and (x_field < field_end or y_field < field_end)) : ({
+        x_start += 1;
+        y_start += 1;
+    }) {
+        x_field += @as(usize, @intFromBool(x_str[x_start] == separator));
+        y_field += @as(usize, @intFromBool(y_str[y_start] == separator));
+        if (x_str[x_start] > y_str[y_start]) {
+            return .gt;
+        } else if (x_str[x_start] < y_str[y_start]) {
+            return .lt;
+        }
+    }
+    return std.math.order(x_field, y_field);
 }
 
 pub fn rlexicographic_cmp(

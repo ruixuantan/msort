@@ -9,37 +9,31 @@ pub const Line = struct {
     key_length: u32,
     key_prefix: u32,
 
-    pub fn get_key(
+    pub inline fn get_key_start_offset(buffer: []const u8, key: Key, separator: u8) usize {
+        var i: usize = 0;
+        var field: usize = 1;
+        while (i < buffer.len and field < key.start) : (i += 1) {
+            if (buffer[i] == separator) field += 1;
+        }
+        return i;
+    }
+
+    pub inline fn get_key(
         raw: []const u8,
         key: Key,
         separator: u8,
     ) struct { offset: usize, length: usize } {
-        var i: usize = 0;
-        var field: usize = 1;
-        while (field < key.start) : (field += 1) {
-            while (i < raw.len and raw[i] != separator) : (i += 1) {}
-            if (i < raw.len) {
-                i += 1;
-            } else {
-                return .{ .offset = raw.len, .length = 0 };
-            }
-        }
-        const start = i;
-
+        const start = get_key_start_offset(raw, key, separator);
         if (key.end == 0) return .{ .offset = start, .length = raw.len - start };
-
-        i = start;
-        field = key.start;
-        while (field < key.end) : (field += 1) {
-            while (i < raw.len and raw[i] != separator) : (i += 1) {}
-            if (field + 1 < key.end) {
-                if (i < raw.len and raw[i] == separator) i += 1;
-            }
+        var i = start;
+        var field = key.start;
+        while (i < raw.len and field < key.end) : (i += 1) {
+            if (raw[i] == separator) field += 1;
         }
-        return .{ .offset = start, .length = i - start };
+        return .{ .offset = start, .length = i - start - 1 };
     }
 
-    pub fn init(raw: []const u8, offset: usize, key: Key, separator: u8) Line {
+    pub inline fn init(raw: []const u8, offset: usize, key: Key, separator: u8) Line {
         var key_offset: usize = 0;
         var key_length: usize = raw.len;
         if (key.start != 1 or key.end != 0) {
@@ -62,11 +56,11 @@ pub const Line = struct {
         };
     }
 
-    pub fn size() usize {
+    pub inline fn size() usize {
         return @sizeOf(Line);
     }
 
-    pub fn string(self: Line, buffer: []const u8) []const u8 {
+    pub inline fn string(self: Line, buffer: []const u8) []const u8 {
         return buffer[@as(usize, self.offset)..][0..@as(usize, self.length)];
     }
 };
@@ -75,6 +69,19 @@ pub const LineTable = struct {
     lines: []Line,
     contents: []const u8,
 };
+
+test "line: get_key_start_offset" {
+    const raw = "cherry,0.1,,2";
+    const key1 = Key{ .start = 1, .end = 4 };
+    const key2 = Key{ .start = 2, .end = 4 };
+    const key3 = Key{ .start = 3, .end = 4 };
+    const key4 = Key{ .start = 4, .end = 4 };
+    const sep: u8 = ',';
+    try std.testing.expectEqual(0, Line.get_key_start_offset(raw, key1, sep));
+    try std.testing.expectEqual(7, Line.get_key_start_offset(raw, key2, sep));
+    try std.testing.expectEqual(11, Line.get_key_start_offset(raw, key3, sep));
+    try std.testing.expectEqual(12, Line.get_key_start_offset(raw, key4, sep));
+}
 
 test "line: with key (-k 2,3 with -t ,)" {
     const raw =
