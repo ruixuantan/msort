@@ -1,58 +1,174 @@
 const std = @import("std");
+const ascii = std.ascii;
+const mem = std.mem;
+const settings = @import("settings.zig");
+const Settings = settings.Settings;
+const CmpType = settings.CmpType;
+const Key = settings.Key;
 
-pub const Key = struct { start: usize, end: usize, reverse: bool = false, numeric: bool = false };
-
-pub const Line = struct {
+pub const KeySlice = struct {
     offset: u32,
     length: u32,
-    key_offset: u32,
-    key_length: u32,
-    key_prefix: u32,
+    prefix: u32,
+    suffix_offset: u32,
 
-    pub inline fn get_key_start_offset(buffer: []const u8, key: Key, separator: u8) usize {
+    inline fn get_key_start_offset(raw: []const u8, key: Key, separator: u8) usize {
         var i: usize = 0;
-        var field: usize = 1;
-        while (i < buffer.len and field < key.start) : (i += 1) {
-            if (buffer[i] == separator) field += 1;
+        var field: usize = 0;
+        // TODO: Change to simd implementation
+        while (i < raw.len and field < key.pos) : (i += 1) {
+            if (raw[i] == separator) field += 1;
         }
         return i;
     }
 
-    pub inline fn get_key(
-        raw: []const u8,
-        key: Key,
-        separator: u8,
-    ) struct { offset: usize, length: usize } {
-        const start = get_key_start_offset(raw, key, separator);
-        if (key.end == 0) return .{ .offset = start, .length = raw.len - start };
+    inline fn get_key_length(raw: []const u8, start: usize, separator: u8) usize {
         var i = start;
-        var field = key.start;
-        while (i < raw.len and field < key.end) : (i += 1) {
-            if (raw[i] == separator) field += 1;
-        }
-        return .{ .offset = start, .length = i - start - 1 };
+        // TODO: Change to simd implementation
+        while (i < raw.len and raw[i] != separator) : (i += 1) {}
+        return i - start;
     }
 
-    pub inline fn init(raw: []const u8, offset: usize, key: Key, separator: u8) Line {
-        var key_offset: usize = 0;
-        var key_length: usize = raw.len;
-        if (key.start != 1 or key.end != 0) {
-            const key_info = get_key(raw, key, separator);
-            key_offset = key_info.offset;
-            key_length = key_info.length;
+    pub fn init(raw: []const u8, key: ?Key, separator: u8) KeySlice {
+        var offset: usize = 0;
+        var length: usize = raw.len;
+        if (key) |k| {
+            offset = get_key_start_offset(raw, k, separator);
+            length = get_key_length(raw, offset, separator);
         }
 
         var prefix_bytes: [4]u8 = .{ 0, 0, 0, 0 };
-        const n = @min(key_length, 4);
-        @memcpy(prefix_bytes[0..n], raw[key_offset..][0..n]);
-        const key_prefix = std.mem.readInt(u32, &prefix_bytes, .big);
+        const n = @min(length, 4);
+        @memcpy(prefix_bytes[0..n], raw[offset..][0..n]);
+        const prefix = mem.readInt(u32, &prefix_bytes, .big);
+        const suffix_offset = offset + n;
 
         return .{
             .offset = @intCast(offset),
+            .length = @intCast(length),
+            .prefix = prefix,
+            .suffix_offset = @intCast(suffix_offset),
+        };
+    }
+
+    pub fn lexicographic_cmp(a: KeySlice, a_buf: []const u8, b: KeySlice, b_buf: []const u8) i8 {
+        if (a.prefix > b.prefix) {
+            return 1;
+        } else if (a.prefix < b.prefix) {
+            return -1;
+        } else {
+            const a_key = a_buf[@as(usize, a.suffix_offset) .. a.length + a.offset];
+            const b_key = b_buf[@as(usize, b.suffix_offset) .. b.length + b.offset];
+            const min = @min(a_key.len, b_key.len);
+            for (0..min) |i| {
+                if (a_key[i] > b_key[i]) {
+                    return 1;
+                } else if (a_key[i] < b_key[i]) {
+                    return -1;
+                }
+            }
+            if (a.length == b.length) {
+                return 0;
+            } else if (a.length > b.length) {
+                return 1;
+            } else {
+                return -1;
+            }
+        }
+    }
+
+    inline fn get_sign(buf: []const u8, i: *usize, end: usize) i8 {
+        if (i.* >= end) return 0;
+        if (buf[i.*] == '-') {
+            i.* += 1;
+            return -1;
+        } else if (buf[i.*] == '+') {
+            i.* += 1;
+            return 1;
+        } else if (!ascii.isDigit(buf[i.*])) {
+            return 0;
+        }
+        return 1;
+    }
+
+    inline fn int_digit_run_end(buf: []const u8, start: usize, end: usize) usize {
+        var k = start;
+        while (k < end and ascii.isDigit(buf[k])) k += 1;
+        return k;
+    }
+
+    /// Compare numeric keys in one forward pass over `i` and `j` (tie → lexicographic on key).
+    pub fn numeric_cmp(a: KeySlice, a_buf: []const u8, b: KeySlice, b_buf: []const u8) i8 {
+        const ae = a.offset + a.length;
+        const be = b.offset + b.length;
+        var i: usize = a.offset;
+        var j: usize = b.offset;
+
+        const sa = get_sign(a_buf, &i, ae);
+        const sb = get_sign(b_buf, &j, be);
+        if (sa == 0 or sb == 0) return lexicographic_cmp(a, a_buf, b, b_buf);
+        if (sa != sb) return if (sa > sb) 1 else -1;
+
+        while (i < ae and a_buf[i] == '0' and i + 1 < ae and ascii.isDigit(a_buf[i + 1])) i += 1;
+        while (j < be and b_buf[j] == '0' and j + 1 < be and ascii.isDigit(b_buf[j + 1])) j += 1;
+
+        // Integer part: compare lengths first so place values align (e.g. 20 < 100), then digits.
+        const ai_end = int_digit_run_end(a_buf, i, ae);
+        const bi_end = int_digit_run_end(b_buf, j, be);
+        const ia = ai_end - i;
+        const ib = bi_end - j;
+        if (ia != ib) return if (ia > ib) sa else -sa;
+        var ki = i;
+        var kj = j;
+        while (ki < ai_end) {
+            const ca = a_buf[ki];
+            const cb = b_buf[kj];
+            if (ca > cb) return sa;
+            if (ca < cb) return -sa;
+            ki += 1;
+            kj += 1;
+        }
+        i = ai_end;
+        j = bi_end;
+
+        const fa = i < ae and a_buf[i] == '.' and i + 1 < ae and ascii.isDigit(a_buf[i + 1]);
+        const fb = j < be and b_buf[j] == '.' and j + 1 < be and ascii.isDigit(b_buf[j + 1]);
+        if (fa) i += 1;
+        if (fb) j += 1;
+        if (!fa and !fb) return lexicographic_cmp(a, a_buf, b, b_buf);
+        if (fa and !fb) return sa;
+        if (!fa and fb) return -sa;
+
+        while (i < ae and j < be) {
+            if (!ascii.isDigit(a_buf[i]) or !ascii.isDigit(b_buf[j])) break;
+            if (a_buf[i] > b_buf[j]) return sa;
+            if (a_buf[i] < b_buf[j]) return -sa;
+            i += 1;
+            j += 1;
+        }
+        while (i < ae and ascii.isDigit(a_buf[i])) {
+            if (a_buf[i] != '0') return sa;
+            i += 1;
+        }
+        while (j < be and ascii.isDigit(b_buf[j])) {
+            if (b_buf[j] != '0') return -sa;
+            j += 1;
+        }
+        return lexicographic_cmp(a, a_buf, b, b_buf);
+    }
+};
+
+pub const Line = struct {
+    offset: u32,
+    length: u32,
+    key_slice: KeySlice,
+
+    pub fn init(raw: []const u8, offset: usize, key: ?Key, separator: u8) Line {
+        const key_slice = KeySlice.init(raw, key, separator);
+        return .{
+            .offset = @intCast(offset),
             .length = @intCast(raw.len),
-            .key_offset = @intCast(offset + key_offset),
-            .key_length = @intCast(key_length),
-            .key_prefix = key_prefix,
+            .key_slice = key_slice,
         };
     }
 
@@ -63,6 +179,49 @@ pub const Line = struct {
     pub inline fn string(self: Line, buffer: []const u8) []const u8 {
         return buffer[@as(usize, self.offset)..][0..@as(usize, self.length)];
     }
+
+    inline fn cmp_inner(
+        reverse: i8,
+        cmp_type: CmpType,
+        a: KeySlice,
+        a_buf: []const u8,
+        b: KeySlice,
+        b_buf: []const u8,
+    ) i8 {
+        // std.log.info("cmp_type: {any}\n", .{cmp_type});
+        const ord = switch (cmp_type) {
+            .lexicographic => KeySlice.lexicographic_cmp(a, a_buf, b, b_buf),
+            .numeric => KeySlice.numeric_cmp(a, a_buf, b, b_buf),
+        };
+        return ord * reverse;
+    }
+
+    pub fn cmp(s: *const Settings, a: Line, a_buf: []const u8, b: Line, b_buf: []const u8) i8 {
+        const a_str = a.string(a_buf);
+        const b_str = b.string(b_buf);
+
+        var ord: i8 = 0;
+        if (s.keys) |keys| {
+            ord = cmp_inner(keys[0].reverse, s.cmp_type, a.key_slice, a_str, b.key_slice, b_str);
+            if (ord != 0) return ord * s.reverse;
+            for (keys[1..]) |key| {
+                const a_key = KeySlice.init(a_str, key, s.separator);
+                const b_key = KeySlice.init(b_str, key, s.separator);
+                ord = cmp_inner(key.reverse, s.cmp_type, a_key, a_str, b_key, b_str);
+                if (ord != 0) return ord * s.reverse;
+            }
+            if (!s.unique and ord == 0) {
+                switch (mem.order(u8, a_str, b_str)) {
+                    .lt => ord = -1,
+                    .gt => ord = 1,
+                    .eq => ord = 0,
+                }
+            }
+        } else {
+            ord = cmp_inner(1, s.cmp_type, a.key_slice, a_str, b.key_slice, b_str);
+        }
+        return ord * s.reverse;
+    }
 };
 
 pub const LineTable = struct {
@@ -70,32 +229,127 @@ pub const LineTable = struct {
     contents: []const u8,
 };
 
-test "line: get_key_start_offset" {
-    const raw = "cherry,0.1,,2";
-    const key1 = Key{ .start = 1, .end = 4 };
-    const key2 = Key{ .start = 2, .end = 4 };
-    const key3 = Key{ .start = 3, .end = 4 };
-    const key4 = Key{ .start = 4, .end = 4 };
-    const sep: u8 = ',';
-    try std.testing.expectEqual(0, Line.get_key_start_offset(raw, key1, sep));
-    try std.testing.expectEqual(7, Line.get_key_start_offset(raw, key2, sep));
-    try std.testing.expectEqual(11, Line.get_key_start_offset(raw, key3, sep));
-    try std.testing.expectEqual(12, Line.get_key_start_offset(raw, key4, sep));
+test "key_slice: lexicographic_cmp" {
+    const raw = "apple\ncherry\napple\napplee\n";
+    const key_slice_a = KeySlice.init(raw[0..5], null, '\n');
+    const key_slice_b = KeySlice.init(raw[6..12], null, '\n');
+    const key_slice_c = KeySlice.init(raw[13..18], null, '\n');
+    const key_slice_d = KeySlice.init(raw[19..25], null, '\n');
+    try std.testing.expectEqual(-1, KeySlice.lexicographic_cmp(
+        key_slice_a,
+        raw,
+        key_slice_b,
+        raw,
+    ));
+    try std.testing.expectEqual(0, KeySlice.lexicographic_cmp(
+        key_slice_a,
+        raw,
+        key_slice_c,
+        raw,
+    ));
+    try std.testing.expectEqual(-1, KeySlice.lexicographic_cmp(
+        key_slice_a,
+        raw,
+        key_slice_d,
+        raw,
+    ));
 }
 
-test "line: with key (-k 2,3 with -t ,)" {
-    const raw =
-        \\3,cherry,0.1,
-        \\1,apple,0.3,red
-        \\2,banana,0.2,yellow
-        \\
-    ;
-    const key = Key{ .start = 2, .end = 4 };
-    const sep: u8 = ',';
-    const line1 = Line.init(raw[0..14], 0, key, sep);
-    const line2 = Line.init(raw[14..30], 14, key, sep);
-    const line3 = Line.init(raw[30..50], 30, key, sep);
-    try std.testing.expectEqualStrings("cherry,0.1", raw[line1.key_offset..][0..line1.key_length]);
-    try std.testing.expectEqualStrings("apple,0.3", raw[line2.key_offset..][0..line2.key_length]);
-    try std.testing.expectEqualStrings("banana,0.2", raw[line3.key_offset..][0..line3.key_length]);
+test "key_slice: numeric_cmp" {
+    const a = KeySlice.init("-0.1", null, ',');
+    const b = KeySlice.init("0.1", null, ',');
+    const c = KeySlice.init("+0.1", null, ',');
+    const d = KeySlice.init("0.11", null, ',');
+    const e = KeySlice.init("0.2", null, ',');
+    const f = KeySlice.init("1", null, ',');
+    const g = KeySlice.init("01", null, ',');
+    const h = KeySlice.init("20", null, ',');
+    const i = KeySlice.init("100", null, ',');
+    try std.testing.expectEqual(0, KeySlice.numeric_cmp(a, "-0.1", a, "-0.1"));
+    try std.testing.expectEqual(-1, KeySlice.numeric_cmp(a, "-0.1", b, "0.1"));
+    try std.testing.expectEqual(-1, KeySlice.numeric_cmp(a, "-0.1", c, "+0.1"));
+    try std.testing.expectEqual(1, KeySlice.numeric_cmp(b, "0.1", c, "+0.1"));
+    try std.testing.expectEqual(-1, KeySlice.numeric_cmp(b, "0.1", d, "0.11"));
+    try std.testing.expectEqual(-1, KeySlice.numeric_cmp(d, "0.11", e, "0.2"));
+
+    try std.testing.expectEqual(0, KeySlice.numeric_cmp(f, "1", f, "1"));
+    try std.testing.expectEqual(-1, KeySlice.numeric_cmp(b, "0.1", g, "01"));
+    try std.testing.expectEqual(-1, KeySlice.numeric_cmp(e, "0.2", f, "1"));
+    try std.testing.expectEqual(-1, KeySlice.numeric_cmp(e, "0.2", g, "01"));
+    try std.testing.expectEqual(-1, KeySlice.numeric_cmp(f, "1", h, "20"));
+    try std.testing.expectEqual(-1, KeySlice.numeric_cmp(h, "20", i, "100"));
+}
+
+test "line: init without key" {
+    const raw = "cherry,0.1,,2";
+    const line = Line.init(raw, 0, null, ',');
+    const expected = Line{
+        .offset = 0,
+        .length = 13,
+        .key_slice = .{
+            .offset = 0,
+            .length = 13,
+            .prefix = mem.readInt(u32, &[4]u8{ 'c', 'h', 'e', 'r' }, .big),
+            .suffix_offset = 4,
+        },
+    };
+    try std.testing.expectEqual(expected, line);
+    try std.testing.expectEqualStrings(expected.string(raw), raw);
+
+    const short_raw = "ab";
+    const short_line = Line.init(short_raw, 0, null, ',');
+    const short_expected = Line{
+        .offset = 0,
+        .length = 2,
+        .key_slice = .{
+            .offset = 0,
+            .length = 2,
+            .prefix = mem.readInt(u32, &[4]u8{ 'a', 'b', 0, 0 }, .big),
+            .suffix_offset = 2,
+        },
+    };
+    try std.testing.expectEqual(short_expected, short_line);
+    try std.testing.expectEqualStrings(short_expected.string(short_raw), short_raw);
+}
+
+test "line: with key" {
+    const raw = "cherry,0.1,,2";
+    const line0 = Line.init(raw, 0, .{ .pos = 0 }, ',');
+    const expected0 = Line{
+        .offset = 0,
+        .length = 13,
+        .key_slice = .{
+            .offset = 0,
+            .length = 6,
+            .prefix = mem.readInt(u32, &[4]u8{ 'c', 'h', 'e', 'r' }, .big),
+            .suffix_offset = 4,
+        },
+    };
+    try std.testing.expectEqual(expected0, line0);
+
+    const line1 = Line.init(raw, 0, .{ .pos = 1 }, ',');
+    const expected1 = Line{
+        .offset = 0,
+        .length = 13,
+        .key_slice = .{
+            .offset = 7,
+            .length = 3,
+            .prefix = mem.readInt(u32, &[4]u8{ '0', '.', '1', 0 }, .big),
+            .suffix_offset = 10,
+        },
+    };
+    try std.testing.expectEqual(expected1, line1);
+
+    const empty_line = Line.init(raw, 0, .{ .pos = 2 }, ',');
+    const expected_empty_line = Line{
+        .offset = 0,
+        .length = 13,
+        .key_slice = .{
+            .offset = 11,
+            .length = 0,
+            .prefix = 0,
+            .suffix_offset = 11,
+        },
+    };
+    try std.testing.expectEqual(expected_empty_line, empty_line);
 }

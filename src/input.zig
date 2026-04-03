@@ -1,72 +1,74 @@
 const std = @import("std");
-const Args = @import("argparse.zig").Args;
-const Line = @import("line.zig").Line;
-const LineTable = @import("line.zig").LineTable;
-const Key = @import("line.zig").Key;
+const mem = std.mem;
+const fs = std.fs;
+const settings = @import("settings.zig");
+const Settings = settings.Settings;
+const Key = settings.Key;
+const line = @import("line.zig");
+const Line = line.Line;
+const LineTable = line.LineTable;
 
 pub const Input = struct {
-    gpa: std.mem.Allocator,
-    args: *const Args,
+    gpa: mem.Allocator,
+    s: *const Settings,
     buffer: []u8,
-    line_table_capacity: usize,
-    line_table: std.ArrayList(Line),
-    file: std.fs.File,
-    reader: std.fs.File.Reader,
+    lines: std.ArrayList(Line),
+    file: fs.File,
+    reader: fs.File.Reader,
     file_index: usize = 0,
-    max_file_index: usize,
     file_pos: usize = 0,
     file_size: usize,
 
     pub fn init(
-        gpa: std.mem.Allocator,
-        args: *const Args,
+        gpa: mem.Allocator,
+        s: *const Settings,
         buffer: []u8,
         line_table_size: usize,
     ) !Input {
         const line_table_capacity = @divFloor(line_table_size, Line.size());
         const line_table = try std.ArrayList(Line).initCapacity(gpa, line_table_capacity);
-        var file: std.fs.File = undefined;
-        var max_file_index: usize = 0;
+        var file: fs.File = undefined;
         var file_size: usize = undefined;
-        if (args.filenames) |filenames| {
-            max_file_index = filenames.len - 1;
-            file = try std.fs.cwd().openFile(filenames[0], .{ .mode = .read_only });
+        if (s.files) |filenames| {
+            file = try fs.cwd().openFile(filenames[0], .{ .mode = .read_only });
         } else {
-            file = std.fs.File.stdin();
+            file = fs.File.stdin();
         }
         file_size = (try file.stat()).size;
 
         return .{
             .gpa = gpa,
-            .args = args,
+            .s = s,
             .buffer = buffer,
-            .line_table_capacity = line_table_capacity,
-            .line_table = line_table,
+            .lines = line_table,
             .file = file,
             .reader = file.reader(buffer),
-            .max_file_index = max_file_index,
             .file_size = @intCast(file_size),
         };
     }
 
-    pub fn deinit(self: *Input) void {
-        self.file.close();
-        self.line_table.deinit(self.gpa);
+    inline fn max_file_index(self: *const Input) usize {
+        return if (self.s.files) |files| files.len - 1 else 0;
     }
 
-    pub fn has_next(self: Input) bool {
-        return self.file_index < self.max_file_index or self.file_pos < self.file_size;
+    pub fn deinit(self: *Input) void {
+        self.file.close();
+        self.lines.deinit(self.gpa);
+    }
+
+    pub fn has_next(self: *Input) bool {
+        return self.file_index < self.max_file_index() or self.file_pos < self.file_size;
     }
 
     pub fn next(self: *Input) !LineTable {
         std.debug.assert(self.has_next());
-        self.line_table.clearRetainingCapacity();
+        self.lines.clearRetainingCapacity();
 
-        if (self.args.filenames != null and self.file_pos == self.file_size) {
+        if (self.s.files != null and self.file_pos == self.file_size) {
             self.file.close();
             self.file_index += 1;
-            self.file = try std.fs.cwd().openFile(
-                self.args.filenames.?[self.file_index],
+            self.file = try fs.cwd().openFile(
+                self.s.files.?[self.file_index],
                 .{ .mode = .read_only },
             );
             self.reader = self.file.reader(self.buffer);
@@ -82,24 +84,23 @@ pub const Input = struct {
         // TODO: Change to simd implementation
         var prev: usize = 0;
         var i: usize = 0;
-        std.debug.assert(self.args.keys.len > 0);
         while (i < contents.len) : (i += 1) {
-            if (self.line_table.items.len == self.line_table_capacity) {
+            if (self.lines.items.len == self.lines.capacity) {
                 break;
-            } else if (contents[i] == self.args.delimiter) {
-                self.line_table.appendAssumeCapacity(
-                    Line.init(contents[prev..i], prev, self.args.keys[0], self.args.separator),
+            } else if (contents[i] == self.s.delimiter) {
+                self.lines.appendAssumeCapacity(
+                    Line.init(contents[prev..i], prev, self.s.first_key, self.s.separator),
                 );
                 prev = i + 1;
             } else if (i == contents.len - 1) {
                 const at_eof = self.file_pos + contents.len >= self.file_size;
                 if (at_eof) {
-                    self.line_table.appendAssumeCapacity(
+                    self.lines.appendAssumeCapacity(
                         Line.init(
                             contents[prev .. i + 1],
                             prev,
-                            self.args.keys[0],
-                            self.args.separator,
+                            self.s.first_key,
+                            self.s.separator,
                         ),
                     );
                     prev = i + 1;
@@ -109,7 +110,7 @@ pub const Input = struct {
         const read_content = try self.reader.interface.take(prev);
         self.file_pos += prev;
         return .{
-            .lines = self.line_table.items,
+            .lines = self.lines.items,
             .contents = read_content,
         };
     }
@@ -134,8 +135,8 @@ fn test_next_helper(
         file_parts[i] = try file.readToEndAlloc(gpa, 1024);
     }
 
-    const args = Args{ .filenames = paths, .keys = &[_]Key{.{ .start = 1, .end = 0 }} };
-    var input = try Input.init(gpa, &args, buffer, line_table_size);
+    const s = Settings{ .files = paths };
+    var input = try Input.init(gpa, &s, buffer, line_table_size);
     defer input.deinit();
 
     var buffer_builder: std.ArrayList(u8) = .empty;
@@ -143,9 +144,9 @@ fn test_next_helper(
     while (input.has_next()) {
         const line_table = try input.next();
         const file_idx = input.file_index;
-        for (line_table.lines) |line| {
-            const off: usize = @intCast(line.offset);
-            const len: usize = @intCast(line.length);
+        for (line_table.lines) |l| {
+            const off: usize = @intCast(l.offset);
+            const len: usize = @intCast(l.length);
             const part = file_parts[file_idx];
             try buffer_builder.appendSlice(gpa, line_table.contents[off..][0..len]);
             if (off + len < part.len) {

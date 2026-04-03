@@ -1,38 +1,45 @@
 const std = @import("std");
-const Args = @import("argparse.zig").Args;
-const Line = @import("line.zig").Line;
-const LineTable = @import("line.zig").LineTable;
-const cmp = @import("cmp.zig").cmp;
+const mem = std.mem;
+const fs = std.fs;
+const Settings = @import("settings.zig").Settings;
+const line = @import("line.zig");
+const Line = line.Line;
+const LineTable = line.LineTable;
 
 pub const Output = struct {
-    gpa: std.mem.Allocator,
+    gpa: mem.Allocator,
     buffer: []u8,
-    args: *const Args,
+    s: *const Settings,
 
-    pub fn init(gpa: std.mem.Allocator, args: *const Args, buffer: []u8) !Output {
+    pub fn init(gpa: mem.Allocator, s: *const Settings, buffer: []u8) !Output {
         return .{
             .gpa = gpa,
             .buffer = buffer,
-            .args = args,
+            .s = s,
         };
     }
 
-    pub fn get_writer(self: *Output) !std.fs.File.Writer {
-        if (self.args.outfile != null) {
-            return (try std.fs.cwd().createFile(self.args.outfile.?, .{})).writer(self.buffer);
+    pub fn get_writer(self: *Output) !fs.File.Writer {
+        if (self.s.outfile) |o| {
+            var file: fs.File = undefined;
+            file = fs.cwd().openFile(o, .{ .mode = .write_only }) catch |err| switch (err) {
+                error.FileNotFound => try fs.cwd().createFile(o, .{}),
+                else => |e| return e,
+            };
+            return file.writer(self.buffer);
         } else {
-            return std.fs.File.stdout().writer(self.buffer);
+            return fs.File.stdout().writer(self.buffer);
         }
     }
 
     fn write_lines(
         self: *Output,
-        writer: *std.fs.File.Writer,
+        writer: *fs.File.Writer,
         line_table: LineTable,
     ) !void {
         var buf_size: usize = 0;
-        for (line_table.lines) |line| {
-            const string = line.string(line_table.contents);
+        for (line_table.lines) |l| {
+            const string = l.string(line_table.contents);
             if (buf_size + string.len + 1 > self.buffer.len) {
                 @branchHint(.unlikely);
                 try writer.interface.flush();
@@ -40,43 +47,43 @@ pub const Output = struct {
             }
             buf_size += string.len + 1;
             try writer.interface.writeAll(string);
-            try writer.interface.writeByte(self.args.delimiter);
+            try writer.interface.writeByte(self.s.delimiter);
         }
         try writer.interface.flush();
     }
 
     fn write_unique_lines(
         self: *Output,
-        writer: *std.fs.File.Writer,
+        writer: *fs.File.Writer,
         line_table: LineTable,
     ) !void {
         var prev = line_table.lines[0];
         var string = prev.string(line_table.contents);
         var buf_size: usize = string.len + 1;
         try writer.interface.writeAll(string);
-        try writer.interface.writeByte(self.args.delimiter);
+        try writer.interface.writeByte(self.s.delimiter);
 
-        for (line_table.lines[1..]) |line| {
-            string = line.string(line_table.contents);
+        for (line_table.lines[1..]) |l| {
+            string = l.string(line_table.contents);
             if (buf_size + string.len + 1 > self.buffer.len) {
                 @branchHint(.unlikely);
                 try writer.interface.flush();
                 buf_size = 0;
             }
-            if (cmp(self.args, prev, line_table.contents, line, line_table.contents) == .eq) {
+            if (Line.cmp(self.s, prev, line_table.contents, l, line_table.contents) == 0) {
                 continue;
             }
-            prev = line;
+            prev = l;
             buf_size += string.len + 1;
             try writer.interface.writeAll(string);
-            try writer.interface.writeByte(self.args.delimiter);
+            try writer.interface.writeByte(self.s.delimiter);
         }
         try writer.interface.flush();
     }
 
     pub fn write_to_file(self: *Output, line_table: LineTable) !void {
         var writer = try self.get_writer();
-        if (self.args.unique) {
+        if (self.s.unique) {
             try self.write_unique_lines(&writer, line_table);
         } else {
             try self.write_lines(&writer, line_table);
@@ -84,7 +91,7 @@ pub const Output = struct {
     }
 
     pub fn create_tmp_dir(self: *Output) !void {
-        std.fs.cwd().makeDir(self.args.tmp_dir) catch |err| {
+        fs.cwd().makeDir(self.s.tmp_dir) catch |err| {
             switch (err) {
                 error.PathAlreadyExists => {},
                 else => return err,
@@ -93,18 +100,18 @@ pub const Output = struct {
     }
 
     pub fn cleanup(self: *Output) void {
-        std.fs.cwd().deleteTree(self.args.tmp_dir) catch {};
+        fs.cwd().deleteTree(self.s.tmp_dir) catch {};
     }
 
     pub fn write_to_tmp(self: *Output, line_table: LineTable, run: usize) !void {
         const tmp_file_name = try std.fmt.allocPrint(
             self.gpa,
             "{s}/{d}.tmp",
-            .{ self.args.tmp_dir, run },
+            .{ self.s.tmp_dir, run },
         );
         defer self.gpa.free(tmp_file_name);
-        var writer = (try std.fs.cwd().createFile(tmp_file_name, .{})).writer(self.buffer);
-        if (self.args.unique) {
+        var writer = (try fs.cwd().createFile(tmp_file_name, .{})).writer(self.buffer);
+        if (self.s.unique) {
             try self.write_unique_lines(&writer, line_table);
         } else {
             try self.write_lines(&writer, line_table);

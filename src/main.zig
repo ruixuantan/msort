@@ -9,7 +9,7 @@ pub fn main() !void {
     defer {
         const check = allocator.deinit();
         if (check == .leak) {
-            std.log.err("memory leak detected", .{});
+            msort.printer.print_err("memory leak detected", .{}) catch {};
             std.process.exit(1);
         }
     }
@@ -17,36 +17,33 @@ pub fn main() !void {
 
     const raw_args = try std.process.argsAlloc(gpa);
     defer std.process.argsFree(gpa, raw_args);
+    const args = try msort.argparse.parse_args(raw_args, msort.Args) orelse return;
+    const settings = try msort.Settings.from_args(gpa, &args);
+    defer settings.deinit(gpa);
 
-    var stdout_buffer: [1024]u8 = undefined;
-    var stdout = std.fs.File.stdout();
-    defer stdout.close();
-    var stdout_writer = stdout.writer(&stdout_buffer);
-
-    const parsed_args = try msort.Args.parse(gpa, raw_args, &stdout_writer);
-    if (parsed_args == null) return;
-    var args = parsed_args.?;
-    defer args.deinit(gpa);
-    try args.validate(&stdout_writer);
-    try args.build_cmp_functions(gpa);
-
-    const input_buffer = try gpa.alignedAlloc(u8, null, args.input_buffer_size());
+    const input_buffer = try gpa.alignedAlloc(u8, null, settings.input_buffer_size());
     defer gpa.free(input_buffer);
-
-    var input = try msort.Input.init(gpa, &args, input_buffer, args.line_table_size());
+    var input = try msort.Input.init(gpa, &settings, input_buffer, settings.line_table_size());
     defer input.deinit();
 
-    const output_buffer = try gpa.alloc(u8, args.output_buffer_size());
+    // const parsed_args = try msort.Args.parse(gpa, raw_args, &stdout_writer);
+    // if (parsed_args == null) return;
+    // var args = parsed_args.?;
+    // defer args.deinit(gpa);
+    // try args.validate(&stdout_writer);
+    // try args.build_cmp_functions(gpa);
+
+    const output_buffer = try gpa.alloc(u8, settings.output_buffer_size());
     defer gpa.free(output_buffer);
-    var output = try msort.Output.init(gpa, &args, output_buffer);
+    var output = try msort.Output.init(gpa, &settings, output_buffer);
     defer output.cleanup();
 
     var run: usize = 0;
     while (input.has_next()) : (run += 1) {
         const line_table = try input.next();
-        switch (args.sort_algorithm) {
-            .quicksort => try msort.sort.quicksort(line_table, &args, 0),
-            else => try msort.sort.mergesort(gpa, line_table, &args),
+        switch (settings.algo) {
+            .quicksort => try msort.sort.quicksort(line_table, &settings, 0),
+            else => try msort.sort.mergesort(gpa, line_table, &settings),
         }
 
         if (run == 0 and !input.has_next()) {
@@ -61,7 +58,7 @@ pub fn main() !void {
     if (run == 0) return;
 
     var writer = try output.get_writer();
-    var merge = try msort.Merge.init(gpa, &args, input_buffer, run, &writer);
+    var merge = try msort.Merge.init(gpa, &settings, input_buffer, run, &writer);
     defer merge.deinit();
     try merge.kway();
 }

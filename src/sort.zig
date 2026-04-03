@@ -1,11 +1,10 @@
 const std = @import("std");
-const cmp = @import("cmp.zig");
 const line = @import("line.zig");
-const Args = @import("argparse.zig").Args;
+const Settings = @import("settings.zig").Settings;
 const LineTable = line.LineTable;
 const Line = line.Line;
 
-pub fn insertsort(line_table: LineTable, args: *const Args) void {
+pub fn insertsort(line_table: LineTable, s: *const Settings) void {
     if (line_table.lines.len < 2) {
         @branchHint(.cold);
         return;
@@ -15,13 +14,13 @@ pub fn insertsort(line_table: LineTable, args: *const Args) void {
     while (i < line_table.lines.len) : (i += 1) {
         const key = line_table.lines[i];
         var j = i;
-        while (j > 0 and cmp.cmp(
-            args,
+        while (j > 0 and Line.cmp(
+            s,
             line_table.lines[j - 1],
             line_table.contents,
             key,
             line_table.contents,
-        ) == .gt) {
+        ) > 0) {
             line_table.lines[j] = line_table.lines[j - 1];
             j -= 1;
         }
@@ -35,27 +34,27 @@ fn merge(
     line_table: LineTable,
     tmp_lines: *std.ArrayList(Line),
     mid: usize,
-    args: *const Args,
+    s: *const Settings,
 ) void {
     std.debug.assert(mid <= line_table.lines.len);
-    if (cmp.cmp(
-        args,
+    if (Line.cmp(
+        s,
         line_table.lines[mid - 1],
         line_table.contents,
         line_table.lines[mid],
         line_table.contents,
-    ) != .gt) return;
+    ) < 1) return;
 
     var i: usize = 0;
     var j: usize = mid;
     while (i < mid and j < line_table.lines.len) {
-        if (cmp.cmp(
-            args,
+        if (Line.cmp(
+            s,
             line_table.lines[i],
             line_table.contents,
             line_table.lines[j],
             line_table.contents,
-        ) != .gt) {
+        ) < 1) {
             tmp_lines.appendAssumeCapacity(line_table.lines[i]);
             i += 1;
         } else {
@@ -72,19 +71,16 @@ fn merge(
     @memcpy(line_table.lines, tmp_lines.items);
 }
 
-pub fn mergesort(gpa: std.mem.Allocator, line_table: LineTable, args: *const Args) !void {
+pub fn mergesort(gpa: std.mem.Allocator, line_table: LineTable, s: *const Settings) !void {
     // bottom up variant
     {
         var i: usize = 0;
         while (i < line_table.lines.len) : (i += SORT_THRESHOLD) {
             const end = @min(i + SORT_THRESHOLD, line_table.lines.len);
-            insertsort(
-                .{
-                    .lines = line_table.lines[i..end],
-                    .contents = line_table.contents,
-                },
-                args,
-            );
+            insertsort(.{
+                .lines = line_table.lines[i..end],
+                .contents = line_table.contents,
+            }, s);
         }
     }
 
@@ -97,13 +93,13 @@ pub fn mergesort(gpa: std.mem.Allocator, line_table: LineTable, args: *const Arg
             const end = @min(i + size * 2, line_table.lines.len);
             const seg = line_table.lines[i..end];
             if (seg.len <= size) continue;
-            merge(.{ .lines = seg, .contents = line_table.contents }, &tmp_lines, size, args);
+            merge(.{ .lines = seg, .contents = line_table.contents }, &tmp_lines, size, s);
             tmp_lines.clearRetainingCapacity();
         }
     }
 }
 
-fn median_of_3(line_table: LineTable, args: *const Args) Line {
+fn median_of_3(line_table: LineTable, s: *const Settings) Line {
     const mid = line_table.lines.len >> 1;
     var tmp: [3]Line = .{
         line_table.lines[0],
@@ -111,7 +107,7 @@ fn median_of_3(line_table: LineTable, args: *const Args) Line {
         line_table.lines[line_table.lines.len - 1],
     };
     const contents = line_table.contents;
-    insertsort(.{ .lines = &tmp, .contents = contents }, args);
+    insertsort(.{ .lines = &tmp, .contents = contents }, s);
     return tmp[1];
 }
 
@@ -119,7 +115,7 @@ const MAX_ITERATIONS: usize = 10000;
 
 pub fn quicksort(
     line_table: LineTable,
-    args: *const Args,
+    s: *const Settings,
     iteration: usize,
 ) error{MaxIterationsReached}!void {
     // hoare partitioning variant
@@ -128,36 +124,36 @@ pub fn quicksort(
         return error.MaxIterationsReached;
     }
     if (line_table.lines.len < SORT_THRESHOLD) {
-        insertsort(line_table, args);
+        insertsort(line_table, s);
         return;
     }
-    const pivot = median_of_3(line_table, args);
+    const pivot = median_of_3(line_table, s);
     var i: isize = -1;
     var j = line_table.lines.len;
 
     while (true) {
         i += 1;
-        while (cmp.cmp(
-            args,
+        while (Line.cmp(
+            s,
             line_table.lines[@intCast(i)],
             line_table.contents,
             pivot,
             line_table.contents,
-        ) == .lt) : (i += 1) {}
+        ) == -1) : (i += 1) {}
         j -= 1;
-        while (cmp.cmp(
-            args,
+        while (Line.cmp(
+            s,
             line_table.lines[j],
             line_table.contents,
             pivot,
             line_table.contents,
-        ) == .gt) : (j -= 1) {}
+        ) == 1) : (j -= 1) {}
         if (@as(usize, @intCast(i)) > j) break;
         std.mem.swap(Line, &line_table.lines[@intCast(i)], &line_table.lines[j]);
     }
     try quicksort(
         .{ .lines = line_table.lines[0..@intCast(i)], .contents = line_table.contents },
-        args,
+        s,
         iteration + 1,
     );
     try quicksort(
@@ -165,7 +161,7 @@ pub fn quicksort(
             .lines = line_table.lines[@intCast(i)..line_table.lines.len],
             .contents = line_table.contents,
         },
-        args,
+        s,
         iteration + 1,
     );
 }
@@ -178,16 +174,14 @@ test "insertsort" {
         \\banana
         \\
     ;
-    const key = line.Key{ .start = 1, .end = 0 };
     var lines: [3]Line = .{
-        Line.init(contents[0..5], 0, key, ' '),
-        Line.init(contents[6..11], 6, key, ' '),
-        Line.init(contents[12..18], 12, key, ' '),
+        Line.init(contents[0..5], 0, null, ' '),
+        Line.init(contents[6..11], 6, null, ' '),
+        Line.init(contents[12..18], 12, null, ' '),
     };
-    var args = Args{ .keys = &[_]line.Key{.{ .start = 1, .end = 0 }}, .separator = ' ' };
-    try args.build_cmp_functions(test_gpa);
-    defer test_gpa.free(args.cmp_functions);
-    insertsort(.{ .lines = &lines, .contents = contents }, &args);
+    var s = Settings{};
+    defer s.deinit(test_gpa);
+    insertsort(.{ .lines = &lines, .contents = contents }, &s);
     try std.testing.expectEqualStrings("apple", lines[0].string(contents));
     try std.testing.expectEqualStrings("banana", lines[1].string(contents));
     try std.testing.expectEqualStrings("zebra", lines[2].string(contents));
@@ -198,12 +192,11 @@ test "mergesort" {
     const contents = "qazwsxedcrfvtgbyhnujmikolp";
     var lines: [26]Line = undefined;
     for (0..26) |i| {
-        lines[i] = Line.init(contents[i .. i + 1], i, .{ .start = 1, .end = 0 }, ' ');
+        lines[i] = Line.init(contents[i .. i + 1], i, null, ' ');
     }
-    var args = Args{ .keys = &[_]line.Key{.{ .start = 1, .end = 0 }}, .separator = ' ' };
-    try args.build_cmp_functions(test_gpa);
-    defer test_gpa.free(args.cmp_functions);
-    try mergesort(test_gpa, .{ .lines = &lines, .contents = contents }, &args);
+    var s = Settings{};
+    defer s.deinit(test_gpa);
+    try mergesort(test_gpa, .{ .lines = &lines, .contents = contents }, &s);
     for (0..26) |k| {
         try std.testing.expectEqual(@as(u8, @intCast('a' + k)), lines[k].string(contents)[0]);
     }
@@ -214,12 +207,11 @@ test "quicksort" {
     const contents = "qazwsxedcrfvtgbyhnujmikolp";
     var lines: [26]Line = undefined;
     for (0..26) |i| {
-        lines[i] = Line.init(contents[i .. i + 1], i, .{ .start = 1, .end = 0 }, ' ');
+        lines[i] = Line.init(contents[i .. i + 1], i, null, ' ');
     }
-    var args = Args{ .keys = &[_]line.Key{.{ .start = 1, .end = 0 }}, .separator = ' ' };
-    try args.build_cmp_functions(test_gpa);
-    defer test_gpa.free(args.cmp_functions);
-    try quicksort(.{ .lines = &lines, .contents = contents }, &args, 0);
+    var s = Settings{};
+    defer s.deinit(test_gpa);
+    try quicksort(.{ .lines = &lines, .contents = contents }, &s, 0);
     for (0..26) |k| {
         try std.testing.expectEqual(@as(u8, @intCast('a' + k)), lines[k].string(contents)[0]);
     }
