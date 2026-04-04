@@ -6,35 +6,58 @@ const Settings = settings.Settings;
 const CmpType = settings.CmpType;
 const Key = settings.Key;
 
+const VEC_LEN = std.simd.suggestVectorLength(u8) orelse 64;
+const VecU8 = @Vector(VEC_LEN, u8);
+
 pub const KeySlice = struct {
     offset: u32,
     length: u32,
     prefix: u32,
     suffix_offset: u32,
 
-    inline fn get_key_start_offset(raw: []const u8, key: Key, separator: u8) usize {
+    inline fn simd_get(raw: []const u8, key: Key, separator: u8) struct { offset: usize, length: usize } {
+        var offset: usize = 0;
+        var end_offset: usize = raw.len;
+        var seen: usize = 0;
+        const sep: VecU8 = @splat(separator);
         var i: usize = 0;
-        var field: usize = 0;
-        // TODO: Change to simd implementation
-        while (i < raw.len and field < key.pos) : (i += 1) {
-            if (raw[i] == separator) field += 1;
-        }
-        return i;
-    }
+        // saturation subtraction: https://ziggit.dev/t/what-does-mean-in-zig/11876
+        // equivalent to: if (raw.len < VEC_LEN) 0 else raw.len - VEC_LEN
+        const max_i = raw.len -| VEC_LEN;
 
-    inline fn get_key_length(raw: []const u8, start: usize, separator: u8) usize {
-        var i = start;
-        // TODO: Change to simd implementation
-        while (i < raw.len and raw[i] != separator) : (i += 1) {}
-        return i - start;
+        while (i < max_i) : (i += VEC_LEN) {
+            const bytes: VecU8 = raw[i .. i + VEC_LEN][0..VEC_LEN].*;
+            var mask: std.meta.Int(.unsigned, VEC_LEN) = @bitCast(bytes == sep);
+            while (mask != 0) {
+                seen += 1;
+                if (seen == key.pos) offset = i + @ctz(mask) + 1;
+                if (seen == key.pos + 1) {
+                    return .{ .offset = offset, .length = i + @ctz(mask) - offset };
+                }
+                mask &= mask - 1;
+            }
+        }
+
+        while (i < raw.len and seen < key.pos + 1) : (i += 1) {
+            if (raw[i] == separator) {
+                seen += 1;
+                if (seen == key.pos) offset = i + 1;
+                if (seen == key.pos + 1) {
+                    end_offset = i;
+                    break;
+                }
+            }
+        }
+        return .{ .offset = offset, .length = end_offset - offset };
     }
 
     pub fn init(raw: []const u8, key: ?Key, separator: u8) KeySlice {
         var offset: usize = 0;
         var length: usize = raw.len;
         if (key) |k| {
-            offset = get_key_start_offset(raw, k, separator);
-            length = get_key_length(raw, offset, separator);
+            const res = simd_get(raw, k, separator);
+            offset = res.offset;
+            length = res.length;
         }
 
         var prefix_bytes: [4]u8 = .{ 0, 0, 0, 0 };
@@ -310,6 +333,61 @@ test "line: init without key" {
     };
     try std.testing.expectEqual(short_expected, short_line);
     try std.testing.expectEqualStrings(short_expected.string(short_raw), short_raw);
+}
+
+test "line: init with simd invocation" {
+    const raw = "apple,banana,cherry,date,elderberry,fig,grape,lemon";
+    const line0 = Line.init(raw, 0, .{ .pos = 0 }, ',');
+    const expected0 = Line{
+        .offset = 0,
+        .length = raw.len,
+        .key_slice = .{
+            .offset = 0,
+            .length = 5,
+            .prefix = mem.readInt(u32, &[4]u8{ 'a', 'p', 'p', 'l' }, .big),
+            .suffix_offset = 4,
+        },
+    };
+    try std.testing.expectEqual(expected0, line0);
+
+    const line2 = Line.init(raw, 0, .{ .pos = 2 }, ',');
+    const expected2 = Line{
+        .offset = 0,
+        .length = raw.len,
+        .key_slice = .{
+            .offset = 13,
+            .length = 6,
+            .prefix = mem.readInt(u32, &[4]u8{ 'c', 'h', 'e', 'r' }, .big),
+            .suffix_offset = 17,
+        },
+    };
+    try std.testing.expectEqual(expected2, line2);
+
+    const line6 = Line.init(raw, 0, .{ .pos = 6 }, ',');
+    const expected6 = Line{
+        .offset = 0,
+        .length = raw.len,
+        .key_slice = .{
+            .offset = 40,
+            .length = 5,
+            .prefix = mem.readInt(u32, &[4]u8{ 'g', 'r', 'a', 'p' }, .big),
+            .suffix_offset = 44,
+        },
+    };
+    try std.testing.expectEqual(expected6, line6);
+
+    const line7 = Line.init(raw, 0, .{ .pos = 7 }, ',');
+    const expected7 = Line{
+        .offset = 0,
+        .length = raw.len,
+        .key_slice = .{
+            .offset = 46,
+            .length = 5,
+            .prefix = mem.readInt(u32, &[4]u8{ 'l', 'e', 'm', 'o' }, .big),
+            .suffix_offset = 50,
+        },
+    };
+    try std.testing.expectEqual(expected7, line7);
 }
 
 test "line: with key" {

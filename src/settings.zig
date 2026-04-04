@@ -15,25 +15,25 @@ pub const Key = struct {
 
     pub fn from_str(gpa: mem.Allocator, str: []const u8) ![]const Key {
         var ls: std.ArrayList(Key) = .empty;
+        errdefer ls.deinit(gpa);
         var parts = mem.splitScalar(u8, str, ',');
         while (parts.next()) |part| {
             var reverse: i8 = 1;
             var cmp_type: CmpType = .lexicographic;
             var i: usize = part.len - 1;
             while (i > 0) : (i -= 1) {
-                if (part[i] == 'r') {
-                    reverse = -1;
-                } else if (part[i] == 'n') {
-                    cmp_type = .numeric;
-                } else if (part[i] >= '0' and part[i] <= '9') {
-                    break;
-                } else {
-                    try printer.print_err("Invalid key: {s}\n", .{str});
-                    return error.InvalidKey;
+                switch (part[i]) {
+                    'r' => reverse = -1,
+                    'n' => cmp_type = .numeric,
+                    '0'...'9' => break,
+                    else => {
+                        try printer.print_err("Invalid key: {s}\n", .{str});
+                        return error.InvalidKey;
+                    },
                 }
             }
             try ls.append(gpa, .{
-                .pos = try std.fmt.parseInt(usize, part, 10),
+                .pos = try std.fmt.parseInt(usize, part[0 .. i + 1], 10),
                 .reverse = reverse,
                 .cmp_type = cmp_type,
             });
@@ -120,6 +120,28 @@ pub const Settings = struct {
         return self.memsize >> 3;
     }
 };
+
+test "Key: from_str" {
+    const gpa = std.testing.allocator;
+    const single_key = try Key.from_str(gpa, "1");
+    defer gpa.free(single_key);
+    try std.testing.expectEqual(single_key[0].pos, 1);
+
+    const multiple_keys = try Key.from_str(gpa, "1,2,3");
+    defer gpa.free(multiple_keys);
+    try std.testing.expectEqual(multiple_keys[0].pos, 1);
+    try std.testing.expectEqual(multiple_keys[1].pos, 2);
+    try std.testing.expectEqual(multiple_keys[2].pos, 3);
+
+    const multiple_with_options = try Key.from_str(gpa, "1r,2n,3");
+    defer gpa.free(multiple_with_options);
+    try std.testing.expectEqual(multiple_with_options[0].pos, 1);
+    try std.testing.expectEqual(multiple_with_options[0].reverse, -1);
+    try std.testing.expectEqual(multiple_with_options[1].pos, 2);
+    try std.testing.expectEqual(multiple_with_options[1].cmp_type, .numeric);
+    try std.testing.expectEqual(multiple_with_options[2].pos, 3);
+    try std.testing.expectEqual(multiple_with_options[2].cmp_type, .lexicographic);
+}
 
 test "settings" {
     const gpa = std.testing.allocator;
