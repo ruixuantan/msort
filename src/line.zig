@@ -48,7 +48,10 @@ pub const KeySlice = struct {
                 }
             }
         }
-        if (offset == 0) return .{ .offset = 0, .length = 0 };
+        if (offset == 0) {
+            @branchHint(.cold);
+            return .{ .offset = 0, .length = 0 };
+        }
         return .{ .offset = offset, .length = raw.len - offset };
     }
 
@@ -72,7 +75,10 @@ pub const KeySlice = struct {
                 }
             }
         }
-        if (offset == 0) return .{ .offset = 0, .length = 0 };
+        if (offset == 0) {
+            @branchHint(.cold);
+            return .{ .offset = 0, .length = 0 };
+        }
         return .{ .offset = offset, .length = raw.len - offset };
     }
 
