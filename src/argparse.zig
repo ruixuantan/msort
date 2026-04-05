@@ -72,7 +72,13 @@ inline fn parse_val(arg: [:0]const u8, comptime T: type) !T {
         return error.InvalidFlag;
     };
     return switch (T) {
-        u8 => val[0],
+        u8 => {
+            if (val.len != 1) {
+                try printer.print_err("Invalid flag (missing value): {s}\n", .{arg});
+                return error.InvalidFlag;
+            }
+            return val[0];
+        },
         []const u8 => val,
         Memory => try Memory.parse(val),
         else => @compileError("Unsupported field type: " ++ @typeName(T)),

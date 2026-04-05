@@ -2,6 +2,7 @@ const std = @import("std");
 const mem = std.mem;
 const fs = std.fs;
 const settings = @import("settings.zig");
+const simd = @import("simd.zig");
 const Settings = settings.Settings;
 const Key = settings.Key;
 const line = @import("line.zig");
@@ -16,8 +17,6 @@ pub const Input = struct {
     file: fs.File,
     reader: fs.File.Reader,
     file_index: usize = 0,
-    file_pos: usize = 0,
-    file_size: usize,
 
     pub fn init(
         gpa: mem.Allocator,
@@ -26,24 +25,20 @@ pub const Input = struct {
         line_table_size: usize,
     ) !Input {
         const line_table_capacity = @divFloor(line_table_size, Line.size());
-        const line_table = try std.ArrayList(Line).initCapacity(gpa, line_table_capacity);
+        const lines = try std.ArrayList(Line).initCapacity(gpa, line_table_capacity);
         var file: fs.File = undefined;
-        var file_size: usize = undefined;
         if (s.files) |filenames| {
             file = try fs.cwd().openFile(filenames[0], .{ .mode = .read_only });
         } else {
             file = fs.File.stdin();
         }
-        file_size = (try file.stat()).size;
-
         return .{
             .gpa = gpa,
             .s = s,
             .buffer = buffer,
-            .lines = line_table,
+            .lines = lines,
             .file = file,
             .reader = file.reader(buffer),
-            .file_size = @intCast(file_size),
         };
     }
 
@@ -56,15 +51,18 @@ pub const Input = struct {
         self.lines.deinit(self.gpa);
     }
 
+    inline fn is_at_eof(self: *Input) bool {
+        return self.reader.interface.peek(1) == error.EndOfStream;
+    }
+
     pub fn has_next(self: *Input) bool {
-        return self.file_index < self.max_file_index() or self.file_pos < self.file_size;
+        return self.file_index < self.max_file_index() or !self.is_at_eof();
     }
 
     pub fn next(self: *Input) !LineTable {
         std.debug.assert(self.has_next());
         self.lines.clearRetainingCapacity();
-
-        if (self.s.files != null and self.file_pos == self.file_size) {
+        if (self.s.files != null and self.is_at_eof()) {
             self.file.close();
             self.file_index += 1;
             self.file = try fs.cwd().openFile(
@@ -72,46 +70,48 @@ pub const Input = struct {
                 .{ .mode = .read_only },
             );
             self.reader = self.file.reader(self.buffer);
-            self.file_pos = 0;
-            self.file_size = @intCast((try self.file.stat()).size);
         }
-
-        const contents = try self.reader.interface.peek(@min(
-            self.file_size - self.file_pos,
+        // fill the buffer
+        _ = self.reader.interface.peek(@min(
             self.buffer.len,
-        ));
+            self.reader.interface.end - self.reader.interface.seek + 1,
+        )) catch {};
 
-        // TODO: Change to simd implementation
-        var prev: usize = 0;
+        const string = self.reader.interface.peek(
+            self.reader.interface.end - self.reader.interface.seek,
+        ) catch unreachable;
+
         var i: usize = 0;
-        while (i < contents.len) : (i += 1) {
-            if (self.lines.items.len == self.lines.capacity) {
-                break;
-            } else if (contents[i] == self.s.delimiter) {
+        var prev = i;
+        while (i < string.len and self.lines.items.len < self.lines.capacity) : (i += 1) {
+            if (string[i] == self.s.delimiter) {
                 self.lines.appendAssumeCapacity(
-                    Line.init(contents[prev..i], prev, self.s.first_key, self.s.separator),
+                    Line.init(string[prev..i], prev, self.s.first_key, self.s.separator),
                 );
                 prev = i + 1;
-            } else if (i == contents.len - 1) {
-                const at_eof = self.file_pos + contents.len >= self.file_size;
-                if (at_eof) {
-                    self.lines.appendAssumeCapacity(
-                        Line.init(
-                            contents[prev .. i + 1],
-                            prev,
-                            self.s.first_key,
-                            self.s.separator,
-                        ),
-                    );
-                    prev = i + 1;
-                }
             }
         }
-        const read_content = try self.reader.interface.take(prev);
-        self.file_pos += prev;
+
+        if (string[i - 1] != self.s.delimiter and
+            self.reader.interface.end < self.buffer.len - 1 and
+            self.lines.items.len < self.lines.capacity)
+        {
+            // handle case where last line is not terminated by the delimiter
+            @branchHint(.cold);
+            self.lines.appendAssumeCapacity(
+                Line.init(
+                    string[prev..i],
+                    prev,
+                    self.s.first_key,
+                    self.s.separator,
+                ),
+            );
+            prev = i;
+        }
+
         return .{
             .lines = self.lines.items,
-            .contents = read_content,
+            .contents = self.reader.interface.take(prev) catch unreachable,
         };
     }
 };
