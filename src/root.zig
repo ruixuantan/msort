@@ -15,6 +15,7 @@ pub const Output = output.Output;
 pub const Merge = merge.Merge;
 
 test {
+    _ = @import("cmp.zig");
     _ = argparse;
     _ = settings;
     _ = line;
