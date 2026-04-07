@@ -32,11 +32,14 @@ pub const Key = struct {
                     },
                 }
             }
-            try ls.append(gpa, .{
-                .pos = try std.fmt.parseInt(usize, part[0 .. i + 1], 10),
-                .reverse = reverse,
-                .cmp_type = cmp_type,
-            });
+            const pos = std.fmt.parseInt(usize, part[0 .. i + 1], 10) catch |err| {
+                switch (err) {
+                    error.InvalidCharacter => try printer.print_err("Invalid key: {s}\n", .{str}),
+                    error.Overflow => try printer.print_err("Key too large: {s}\n", .{str}),
+                }
+                return error.InvalidKey;
+            };
+            try ls.append(gpa, .{ .pos = pos, .reverse = reverse, .cmp_type = cmp_type });
         }
         return try ls.toOwnedSlice(gpa);
     }

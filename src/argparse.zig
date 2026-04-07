@@ -9,7 +9,13 @@ pub const Memory = struct {
     value: usize,
 
     pub fn parse(str: []const u8) !Memory {
-        const value = try std.fmt.parseInt(usize, str[0 .. str.len - 1], 10);
+        const value = std.fmt.parseInt(usize, str[0 .. str.len - 1], 10) catch |err| {
+            switch (err) {
+                error.InvalidCharacter => try printer.print_err("Invalid memory size: {s}\n", .{str}),
+                error.Overflow => try printer.print_err("Memory size too large: {s}\n", .{str}),
+            }
+            return error.InvalidMemsize;
+        };
         const memsize = switch (str[str.len - 1]) {
             'K' => value * 1024,
             'M' => value * 1024 * 1024,

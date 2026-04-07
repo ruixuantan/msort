@@ -26,13 +26,6 @@ pub fn main() !void {
     var input = try msort.Input.init(gpa, &settings, input_buffer, settings.line_table_size());
     defer input.deinit();
 
-    // const parsed_args = try msort.Args.parse(gpa, raw_args, &stdout_writer);
-    // if (parsed_args == null) return;
-    // var args = parsed_args.?;
-    // defer args.deinit(gpa);
-    // try args.validate(&stdout_writer);
-    // try args.build_cmp_functions(gpa);
-
     const output_buffer = try gpa.alloc(u8, settings.output_buffer_size());
     defer gpa.free(output_buffer);
     var output = try msort.Output.init(gpa, &settings, output_buffer);
