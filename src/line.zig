@@ -96,87 +96,6 @@ pub const KeySlice = struct {
     pub inline fn string(self: KeySlice, buf: []const u8) []const u8 {
         return buf[@as(usize, self.offset) .. self.length + self.offset];
     }
-
-    inline fn get_sign(buf: []const u8, i: *usize, end: usize) i8 {
-        if (i.* >= end) return 0;
-        if (buf[i.*] == '-') {
-            i.* += 1;
-            return -1;
-        } else if (buf[i.*] == '+') {
-            i.* += 1;
-            return 1;
-        } else if (!ascii.isDigit(buf[i.*])) {
-            return 0;
-        }
-        return 1;
-    }
-
-    inline fn int_digit_run_end(buf: []const u8, start: usize, end: usize) usize {
-        var k = start;
-        while (k < end and ascii.isDigit(buf[k])) k += 1;
-        return k;
-    }
-
-    /// Compare numeric keys in one forward pass over `i` and `j` (tie → lexicographic on key).
-    pub fn numeric_cmp(a: KeySlice, a_buf: []const u8, b: KeySlice, b_buf: []const u8) i8 {
-        const ae = a.offset + a.length;
-        const be = b.offset + b.length;
-        var i: usize = a.offset;
-        var j: usize = b.offset;
-
-        const sa = get_sign(a_buf, &i, ae);
-        const sb = get_sign(b_buf, &j, be);
-        if (sa == 0 or sb == 0) return lib_cmp.lexicographic(a.string(a_buf), b.string(b_buf));
-        if (sa != sb) return if (sa > sb) 1 else -1;
-
-        while (i < ae and a_buf[i] == '0' and i + 1 < ae and ascii.isDigit(a_buf[i + 1])) i += 1;
-        while (j < be and b_buf[j] == '0' and j + 1 < be and ascii.isDigit(b_buf[j + 1])) j += 1;
-
-        // Integer part: compare lengths first so place values align (e.g. 20 < 100), then digits.
-        const ai_end = int_digit_run_end(a_buf, i, ae);
-        const bi_end = int_digit_run_end(b_buf, j, be);
-        const ia = ai_end - i;
-        const ib = bi_end - j;
-        if (ia != ib) return if (ia > ib) sa else -sa;
-        var ki = i;
-        var kj = j;
-        while (ki < ai_end) {
-            const ca = a_buf[ki];
-            const cb = b_buf[kj];
-            if (ca > cb) return sa;
-            if (ca < cb) return -sa;
-            ki += 1;
-            kj += 1;
-        }
-        i = ai_end;
-        j = bi_end;
-
-        const fa = i < ae and a_buf[i] == '.' and i + 1 < ae and ascii.isDigit(a_buf[i + 1]);
-        const fb = j < be and b_buf[j] == '.' and j + 1 < be and ascii.isDigit(b_buf[j + 1]);
-        if (fa) i += 1;
-        if (fb) j += 1;
-        if (!fa and !fb) return lib_cmp.lexicographic(a.string(a_buf), b.string(b_buf));
-
-        if (fa and !fb) return sa;
-        if (!fa and fb) return -sa;
-
-        while (i < ae and j < be) {
-            if (!ascii.isDigit(a_buf[i]) or !ascii.isDigit(b_buf[j])) break;
-            if (a_buf[i] > b_buf[j]) return sa;
-            if (a_buf[i] < b_buf[j]) return -sa;
-            i += 1;
-            j += 1;
-        }
-        while (i < ae and ascii.isDigit(a_buf[i])) {
-            if (a_buf[i] != '0') return sa;
-            i += 1;
-        }
-        while (j < be and ascii.isDigit(b_buf[j])) {
-            if (b_buf[j] != '0') return -sa;
-            j += 1;
-        }
-        return lib_cmp.lexicographic(a.string(a_buf), b.string(b_buf));
-    }
 };
 
 pub const Line = struct {
@@ -211,7 +130,7 @@ pub const Line = struct {
     ) i8 {
         const ord = switch (cmp_type) {
             .lexicographic => lib_cmp.lexicographic(a.string(a_buf), b.string(b_buf)),
-            .numeric => KeySlice.numeric_cmp(a, a_buf, b, b_buf),
+            .numeric => lib_cmp.numeric(a.string(a_buf), b.string(b_buf)),
         };
         return ord * reverse;
     }
@@ -262,31 +181,6 @@ pub const LineTable = struct {
     lines: []Line,
     contents: []const u8,
 };
-
-test "key_slice: numeric_cmp" {
-    const a = KeySlice.init("-0.1", null, ',');
-    const b = KeySlice.init("0.1", null, ',');
-    const c = KeySlice.init("+0.1", null, ',');
-    const d = KeySlice.init("0.11", null, ',');
-    const e = KeySlice.init("0.2", null, ',');
-    const f = KeySlice.init("1", null, ',');
-    const g = KeySlice.init("01", null, ',');
-    const h = KeySlice.init("20", null, ',');
-    const i = KeySlice.init("100", null, ',');
-    try std.testing.expectEqual(0, KeySlice.numeric_cmp(a, "-0.1", a, "-0.1"));
-    try std.testing.expectEqual(-1, KeySlice.numeric_cmp(a, "-0.1", b, "0.1"));
-    try std.testing.expectEqual(-1, KeySlice.numeric_cmp(a, "-0.1", c, "+0.1"));
-    try std.testing.expectEqual(1, KeySlice.numeric_cmp(b, "0.1", c, "+0.1"));
-    try std.testing.expectEqual(-1, KeySlice.numeric_cmp(b, "0.1", d, "0.11"));
-    try std.testing.expectEqual(-1, KeySlice.numeric_cmp(d, "0.11", e, "0.2"));
-
-    try std.testing.expectEqual(0, KeySlice.numeric_cmp(f, "1", f, "1"));
-    try std.testing.expectEqual(-1, KeySlice.numeric_cmp(b, "0.1", g, "01"));
-    try std.testing.expectEqual(-1, KeySlice.numeric_cmp(e, "0.2", f, "1"));
-    try std.testing.expectEqual(-1, KeySlice.numeric_cmp(e, "0.2", g, "01"));
-    try std.testing.expectEqual(-1, KeySlice.numeric_cmp(f, "1", h, "20"));
-    try std.testing.expectEqual(-1, KeySlice.numeric_cmp(h, "20", i, "100"));
-}
 
 test "line: init without key" {
     const raw = "cherry,0.1,,2";
