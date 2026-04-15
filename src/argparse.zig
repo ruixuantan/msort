@@ -3,16 +3,18 @@ const std = @import("std");
 const build_options = @import("build_options");
 const assert = std.debug.assert;
 const mem = std.mem;
+const parseInt = std.fmt.parseInt;
 const printer = @import("printer.zig");
+const print_err = printer.print_err;
 
 pub const Memory = struct {
     value: usize,
 
     pub fn parse(str: []const u8) !Memory {
-        const value = std.fmt.parseInt(usize, str[0 .. str.len - 1], 10) catch |err| {
+        const value = parseInt(usize, str[0 .. str.len - 1], 10) catch |err| {
             switch (err) {
-                error.InvalidCharacter => try printer.print_err("Invalid memory size: {s}\n", .{str}),
-                error.Overflow => try printer.print_err("Memory size too large: {s}\n", .{str}),
+                error.InvalidCharacter => try print_err("Invalid memory size: {s}\n", .{str}),
+                error.Overflow => try print_err("Memory size too large: {s}\n", .{str}),
             }
             return error.InvalidMemsize;
         };
@@ -21,12 +23,12 @@ pub const Memory = struct {
             'M' => value * 1024 * 1024,
             'G' => value * 1024 * 1024 * 1024,
             else => {
-                try printer.print_err("Invalid memory size: {s}\n", .{str});
+                try print_err("Invalid memory size: {s}\n", .{str});
                 return error.InvalidMemsize;
             },
         };
         if (memsize > std.math.maxInt(u32)) {
-            try printer.print_err("Memory size too large: {s}\n", .{str});
+            try print_err("Memory size too large: {s}\n", .{str});
             return error.InvalidMemsize;
         }
         return .{ .value = memsize };
@@ -74,18 +76,25 @@ inline fn parse_val(arg: [:0]const u8, comptime T: type) !T {
     var parts = mem.splitScalar(u8, arg, '=');
     assert(parts.next() != null);
     const val = parts.next() orelse {
-        try printer.print_err("Invalid flag (missing '=value'): {s}\n", .{arg});
+        try print_err("Invalid flag (missing '=value'): {s}\n", .{arg});
         return error.InvalidFlag;
     };
     return switch (T) {
         u8 => {
             if (val.len != 1) {
-                try printer.print_err("Invalid flag (missing value): {s}\n", .{arg});
+                try print_err("Invalid flag (missing value): {s}\n", .{arg});
                 return error.InvalidFlag;
             }
             return val[0];
         },
         []const u8 => val,
+        usize => parseInt(usize, val, 10) catch |err| {
+            switch (err) {
+                error.InvalidCharacter => try print_err("Invalid integer value: {s}\n", .{arg}),
+                error.Overflow => try print_err("Flag value too large: {s}\n", .{arg}),
+            }
+            return error.InvalidFlag;
+        },
         Memory => try Memory.parse(val),
         else => @compileError("Unsupported field type: " ++ @typeName(T)),
     };
@@ -114,7 +123,7 @@ fn parse_field(arg: [:0]const u8, comptime CliArgs: type, cli_args: *CliArgs) !v
         }
     }
     if (!parsed) {
-        try printer.print_err("Invalid flag: {s}\n", .{arg});
+        try print_err("Invalid flag: {s}\n", .{arg});
         return error.InvalidFlag;
     }
 }
@@ -126,6 +135,7 @@ pub const Args = struct {
     memsize: Memory = .{ .value = 8 * 1024 * 1024 },
     numeric: bool = false,
     outfile: ?[]const u8 = null,
+    parallel: usize = 1,
     reverse: bool = false,
     separator: u8 = ' ',
     tmp_dir: []const u8 = "tmp",
@@ -157,6 +167,9 @@ pub const Args = struct {
         \\
         \\  -o, --outfile=[file]
         \\    Write output to file, instead of stdout
+        \\
+        \\  -p, --parallel=[num]
+        \\    Number of threads to use. Default: 1
         \\
         \\  -r, --reverse
         \\    Reverse the order of the sort. Default: false
