@@ -1,20 +1,21 @@
 const std = @import("std");
-const File = std.fs.File;
+const Io = std.Io;
+const File = std.Io.File;
 
-pub fn print(comptime message: []const u8) !void {
+pub fn print(io: Io, comptime message: []const u8) !void {
     var stdout_buffer: [1024]u8 = undefined;
-    var stdout = File.stderr();
-    defer stdout.close();
-    var stdout_writer = stdout.writer(&stdout_buffer);
+    var stdout = File.stdout();
+    defer stdout.close(io);
+    var stdout_writer = stdout.writer(io, &stdout_buffer);
     try stdout_writer.interface.print("{s}\n", .{message});
     try stdout_writer.interface.flush();
 }
 
-pub fn print_err(comptime message: []const u8, args: anytype) !void {
+pub fn print_err(io: Io, comptime message: []const u8, args: anytype) !void {
     var stderr_buffer: [1024]u8 = undefined;
     var stderr = File.stderr();
-    defer stderr.close();
-    var stderr_writer = stderr.writer(&stderr_buffer);
+    defer stderr.close(io);
+    var stderr_writer = stderr.writer(io, &stderr_buffer);
     try stderr_writer.interface.print(message, args);
     try stderr_writer.interface.flush();
 }

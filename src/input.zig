@@ -1,5 +1,8 @@
 const std = @import("std");
 const mem = std.mem;
+const Io = std.Io;
+const File = Io.File;
+const Allocator = mem.Allocator;
 const fs = std.fs;
 const settings = @import("settings.zig");
 const simd = @import("simd.zig");
@@ -10,35 +13,38 @@ const Line = line.Line;
 const LineTable = line.LineTable;
 
 pub const Input = struct {
-    gpa: mem.Allocator,
+    gpa: Allocator,
+    io: Io,
     s: *const Settings,
     buffer: []u8,
     lines: std.ArrayList(Line),
-    file: fs.File,
-    reader: fs.File.Reader,
+    file: File,
+    reader: File.Reader,
     file_index: usize = 0,
 
     pub fn init(
-        gpa: mem.Allocator,
+        gpa: Allocator,
+        io: Io,
         s: *const Settings,
         buffer: []u8,
         line_table_size: usize,
     ) !Input {
         const line_table_capacity = @divFloor(line_table_size, Line.size());
         const lines = try std.ArrayList(Line).initCapacity(gpa, line_table_capacity);
-        var file: fs.File = undefined;
+        var file: File = undefined;
         if (s.files) |filenames| {
-            file = try fs.cwd().openFile(filenames[0], .{ .mode = .read_only });
+            file = try Io.Dir.cwd().openFile(io, filenames[0], .{ .mode = .read_only });
         } else {
-            file = fs.File.stdin();
+            file = File.stdin();
         }
         return .{
             .gpa = gpa,
+            .io = io,
             .s = s,
             .buffer = buffer,
             .lines = lines,
             .file = file,
-            .reader = file.reader(buffer),
+            .reader = file.reader(io, buffer),
         };
     }
 
@@ -47,7 +53,7 @@ pub const Input = struct {
     }
 
     pub fn deinit(self: *Input) void {
-        self.file.close();
+        self.file.close(self.io);
         self.lines.deinit(self.gpa);
     }
 
@@ -63,13 +69,14 @@ pub const Input = struct {
         std.debug.assert(self.has_next());
         self.lines.clearRetainingCapacity();
         if (self.s.files != null and self.is_at_eof()) {
-            self.file.close();
+            self.file.close(self.io);
             self.file_index += 1;
-            self.file = try fs.cwd().openFile(
+            self.file = try Io.Dir.cwd().openFile(
+                self.io,
                 self.s.files.?[self.file_index],
                 .{ .mode = .read_only },
             );
-            self.reader = self.file.reader(self.buffer);
+            self.reader = self.file.reader(self.io, self.buffer);
         }
         // fill the buffer
         _ = self.reader.interface.peek(@min(
@@ -117,7 +124,8 @@ pub const Input = struct {
 };
 
 fn test_next_helper(
-    gpa: std.mem.Allocator,
+    io: Io,
+    gpa: Allocator,
     buffer: []u8,
     paths: []const []const u8,
     line_table_size: usize,
@@ -130,13 +138,15 @@ fn test_next_helper(
         gpa.free(file_parts);
     }
     for (paths, 0..) |p, i| {
-        const file = try std.fs.cwd().openFile(p, .{ .mode = .read_only });
-        defer file.close();
-        file_parts[i] = try file.readToEndAlloc(gpa, 1024);
+        const file = try Io.Dir.cwd().openFile(io, p, .{ .mode = .read_only });
+        defer file.close(io);
+        var reader = file.reader(io, buffer);
+        const size = try reader.getSize();
+        file_parts[i] = try reader.interface.readAlloc(gpa, size);
     }
 
     const s = Settings{ .files = paths };
-    var input = try Input.init(gpa, &s, buffer, line_table_size);
+    var input = try Input.init(gpa, io, &s, buffer, line_table_size);
     defer input.deinit();
 
     var buffer_builder: std.ArrayList(u8) = .empty;
@@ -164,11 +174,13 @@ fn test_next_helper(
 }
 
 test "Input: next, test_26.txt" {
-    const test_gpa = std.testing.allocator;
-    const buffer = try test_gpa.alloc(u8, 1024);
-    defer test_gpa.free(buffer);
+    const io = std.testing.io;
+    const gpa = std.testing.allocator;
+    const buffer = try gpa.alloc(u8, 1024);
+    defer gpa.free(buffer);
     try test_next_helper(
-        test_gpa,
+        io,
+        gpa,
         buffer,
         &[_][]const u8{"test_data/test_26.txt"},
         26 * Line.size(),
@@ -176,11 +188,13 @@ test "Input: next, test_26.txt" {
 }
 
 test "Input: next, test_26.txt, line_table_size 10 lines" {
-    const test_gpa = std.testing.allocator;
-    const buffer = try test_gpa.alloc(u8, 1024);
-    defer test_gpa.free(buffer);
+    const io = std.testing.io;
+    const gpa = std.testing.allocator;
+    const buffer = try gpa.alloc(u8, 1024);
+    defer gpa.free(buffer);
     try test_next_helper(
-        test_gpa,
+        io,
+        gpa,
         buffer,
         &[_][]const u8{"test_data/test_26.txt"},
         10 * Line.size(),
@@ -188,11 +202,13 @@ test "Input: next, test_26.txt, line_table_size 10 lines" {
 }
 
 test "Input: next, test_26.txt, line_table 26, buffer 30" {
-    const test_gpa = std.testing.allocator;
-    const buffer = try test_gpa.alloc(u8, 30);
-    defer test_gpa.free(buffer);
+    const io = std.testing.io;
+    const gpa = std.testing.allocator;
+    const buffer = try gpa.alloc(u8, 30);
+    defer gpa.free(buffer);
     try test_next_helper(
-        test_gpa,
+        io,
+        gpa,
         buffer,
         &[_][]const u8{"test_data/test_26.txt"},
         26 * Line.size(),
@@ -200,11 +216,13 @@ test "Input: next, test_26.txt, line_table 26, buffer 30" {
 }
 
 test "Input: next, test_26.txt and test_additional.txt" {
-    const test_gpa = std.testing.allocator;
-    const buffer = try test_gpa.alloc(u8, 1024);
-    defer test_gpa.free(buffer);
+    const io = std.testing.io;
+    const gpa = std.testing.allocator;
+    const buffer = try gpa.alloc(u8, 1024);
+    defer gpa.free(buffer);
     try test_next_helper(
-        test_gpa,
+        io,
+        gpa,
         buffer,
         &[_][]const u8{ "test_data/test_26.txt", "test_data/test_additional.txt" },
         1024 * Line.size(),

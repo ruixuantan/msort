@@ -1,7 +1,9 @@
 const std = @import("std");
 const mem = std.mem;
+const Allocator = mem.Allocator;
 const Args = @import("argparse.zig").Args;
 const printer = @import("printer.zig");
+const Io = std.Io;
 
 pub const CmpType = enum {
     lexicographic,
@@ -13,7 +15,7 @@ pub const Key = struct {
     reverse: i8 = 1,
     cmp_type: CmpType = .lexicographic,
 
-    pub fn from_str(gpa: mem.Allocator, str: []const u8) ![]const Key {
+    pub fn from_str(gpa: Allocator, io: Io, str: []const u8) ![]const Key {
         var ls: std.ArrayList(Key) = .empty;
         errdefer ls.deinit(gpa);
         var parts = mem.splitScalar(u8, str, ',');
@@ -27,15 +29,15 @@ pub const Key = struct {
                     'n' => cmp_type = .numeric,
                     '0'...'9' => break,
                     else => {
-                        try printer.print_err("Invalid key: {s}\n", .{str});
+                        try printer.print_err(io, "Invalid key: {s}\n", .{str});
                         return error.InvalidKey;
                     },
                 }
             }
             const pos = std.fmt.parseInt(usize, part[0 .. i + 1], 10) catch |err| {
                 switch (err) {
-                    error.InvalidCharacter => try printer.print_err("Invalid key: {s}\n", .{str}),
-                    error.Overflow => try printer.print_err("Key too large: {s}\n", .{str}),
+                    error.InvalidCharacter => try printer.print_err(io, "Invalid key: {s}\n", .{str}),
+                    error.Overflow => try printer.print_err(io, "Key too large: {s}\n", .{str}),
                 }
                 return error.InvalidKey;
             };
@@ -49,10 +51,10 @@ pub const Algo = enum {
     mergesort,
     quicksort,
 
-    pub fn from_str(str: []const u8) !Algo {
+    pub fn from_str(io: Io, str: []const u8) !Algo {
         if (mem.eql(u8, str, "mergesort")) return .mergesort;
         if (mem.eql(u8, str, "quicksort")) return .quicksort;
-        try printer.print_err("Invalid sort algorithm: {s}\n", .{str});
+        try printer.print_err(io, "Invalid sort algorithm: {s}\n", .{str});
         return error.InvalidAlgo;
     }
 };
@@ -72,12 +74,13 @@ pub const Settings = struct {
     unique: bool = false,
     files: ?[]const []const u8 = null,
 
-    fn validate_files(files: []const [:0]const u8) !void {
+    fn validate_files(io: Io, files: []const [:0]const u8) !void {
         for (files) |filename| {
-            var file = std.fs.cwd().openFile(filename, .{ .mode = .read_only }) catch |err| {
+            var file = Io.Dir.cwd().openFile(io, filename, .{ .mode = .read_only }) catch |err| {
                 switch (err) {
-                    error.FileNotFound => try printer.print_err("No such file: {s}", .{filename}),
+                    error.FileNotFound => try printer.print_err(io, "No such file: {s}", .{filename}),
                     error.AccessDenied => try printer.print_err(
+                        io,
                         "Read access denied: {s}",
                         .{filename},
                     ),
@@ -85,15 +88,15 @@ pub const Settings = struct {
                 }
                 return error.ValidationFailed;
             };
-            defer file.close();
+            defer file.close(io);
         }
     }
 
-    pub fn from_args(gpa: mem.Allocator, args: *const Args) !Settings {
-        if (args.positional) |files| try validate_files(files);
-        const keys = if (args.keys) |k_str| try Key.from_str(gpa, k_str) else null;
+    pub fn from_args(gpa: Allocator, io: Io, args: *const Args) !Settings {
+        if (args.positional) |files| try validate_files(io, files);
+        const keys = if (args.keys) |k_str| try Key.from_str(gpa, io, k_str) else null;
         return .{
-            .algo = try Algo.from_str(args.algo),
+            .algo = try Algo.from_str(io, args.algo),
             .delimiter = args.delimiter,
             .first_key = if (keys) |ks| ks[0] else null,
             .keys = keys,
@@ -109,7 +112,7 @@ pub const Settings = struct {
         };
     }
 
-    pub fn deinit(self: Settings, gpa: mem.Allocator) void {
+    pub fn deinit(self: Settings, gpa: Allocator) void {
         if (self.keys) |keys| gpa.free(keys);
     }
 
@@ -128,17 +131,18 @@ pub const Settings = struct {
 
 test "Key: from_str" {
     const gpa = std.testing.allocator;
-    const single_key = try Key.from_str(gpa, "1");
+    const io = std.testing.io;
+    const single_key = try Key.from_str(gpa, io, "1");
     defer gpa.free(single_key);
     try std.testing.expectEqual(single_key[0].pos, 1);
 
-    const multiple_keys = try Key.from_str(gpa, "1,2,3");
+    const multiple_keys = try Key.from_str(gpa, io, "1,2,3");
     defer gpa.free(multiple_keys);
     try std.testing.expectEqual(multiple_keys[0].pos, 1);
     try std.testing.expectEqual(multiple_keys[1].pos, 2);
     try std.testing.expectEqual(multiple_keys[2].pos, 3);
 
-    const multiple_with_options = try Key.from_str(gpa, "1r,2n,3");
+    const multiple_with_options = try Key.from_str(gpa, io, "1r,2n,3");
     defer gpa.free(multiple_with_options);
     try std.testing.expectEqual(multiple_with_options[0].pos, 1);
     try std.testing.expectEqual(multiple_with_options[0].reverse, -1);
@@ -150,6 +154,7 @@ test "Key: from_str" {
 
 test "settings" {
     const gpa = std.testing.allocator;
+    const io = std.testing.io;
     const args = Args{
         .algo = "mergesort",
         .delimiter = '\n',
@@ -159,6 +164,6 @@ test "settings" {
         .outfile = null,
         .reverse = false,
     };
-    const settings = try Settings.from_args(gpa, &args);
+    const settings = try Settings.from_args(gpa, io, &args);
     defer settings.deinit(gpa);
 }

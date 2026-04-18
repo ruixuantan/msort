@@ -1,34 +1,26 @@
 const std = @import("std");
 const msort = @import("msort");
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     defer std.process.exit(0);
     errdefer std.process.exit(1);
+    const gpa = init.gpa;
+    const io = init.io;
 
-    var allocator: std.heap.DebugAllocator(.{}) = .init;
-    defer {
-        const check = allocator.deinit();
-        if (check == .leak) {
-            msort.printer.print_err("memory leak detected", .{}) catch {};
-            std.process.exit(1);
-        }
-    }
-    const gpa = allocator.allocator();
-
-    const raw_args = try std.process.argsAlloc(gpa);
-    defer std.process.argsFree(gpa, raw_args);
-    const args = try msort.argparse.parse_args(raw_args, msort.Args) orelse return;
-    const settings = try msort.Settings.from_args(gpa, &args);
+    const raw_args = try init.minimal.args.toSlice(gpa);
+    defer gpa.free(raw_args);
+    const args = try msort.argparse.parse_args(io, raw_args, msort.Args) orelse return;
+    const settings = try msort.Settings.from_args(gpa, io, &args);
     defer settings.deinit(gpa);
 
     const input_buffer = try gpa.alignedAlloc(u8, null, settings.input_buffer_size());
     defer gpa.free(input_buffer);
-    var input = try msort.Input.init(gpa, &settings, input_buffer, settings.line_table_size());
+    var input = try msort.Input.init(gpa, io, &settings, input_buffer, settings.line_table_size());
     defer input.deinit();
 
     const output_buffer = try gpa.alloc(u8, settings.output_buffer_size());
     defer gpa.free(output_buffer);
-    var output = try msort.Output.init(gpa, &settings, output_buffer);
+    var output = try msort.Output.init(gpa, io, &settings, output_buffer);
     defer output.cleanup();
 
     var run: usize = 0;
@@ -51,7 +43,7 @@ pub fn main() !void {
     if (run == 0) return;
 
     var writer = try output.get_writer();
-    var merge = try msort.Merge.init(gpa, &settings, input_buffer, run, &writer);
+    var merge = try msort.Merge.init(gpa, io, &settings, input_buffer, run, &writer);
     defer merge.deinit();
     try merge.kway();
 }

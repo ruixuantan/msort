@@ -1,40 +1,45 @@
 const std = @import("std");
 const mem = std.mem;
-const fs = std.fs;
+const Allocator = mem.Allocator;
+const Io = std.Io;
+const Dir = Io.Dir;
+const File = Io.File;
 const Settings = @import("settings.zig").Settings;
 const line = @import("line.zig");
 const Line = line.Line;
 const LineTable = line.LineTable;
 
 pub const Output = struct {
-    gpa: mem.Allocator,
+    gpa: Allocator,
+    io: Io,
     buffer: []u8,
     s: *const Settings,
 
-    pub fn init(gpa: mem.Allocator, s: *const Settings, buffer: []u8) !Output {
+    pub fn init(gpa: Allocator, io: Io, s: *const Settings, buffer: []u8) !Output {
         return .{
             .gpa = gpa,
+            .io = io,
             .buffer = buffer,
             .s = s,
         };
     }
 
-    pub fn get_writer(self: *Output) !fs.File.Writer {
+    pub fn get_writer(self: *Output) !File.Writer {
         if (self.s.outfile) |o| {
-            var file: fs.File = undefined;
-            file = fs.cwd().openFile(o, .{ .mode = .write_only }) catch |err| switch (err) {
-                error.FileNotFound => try fs.cwd().createFile(o, .{}),
+            var file: File = undefined;
+            file = Dir.cwd().openFile(self.io, o, .{ .mode = .write_only }) catch |err| switch (err) {
+                error.FileNotFound => try Dir.cwd().createFile(self.io, o, .{}),
                 else => |e| return e,
             };
-            return file.writer(self.buffer);
+            return file.writer(self.io, self.buffer);
         } else {
-            return fs.File.stdout().writer(self.buffer);
+            return File.stdout().writer(self.io, self.buffer);
         }
     }
 
     fn write_lines(
         self: *Output,
-        writer: *fs.File.Writer,
+        writer: *File.Writer,
         line_table: LineTable,
     ) !void {
         var buf_size: usize = 0;
@@ -54,7 +59,7 @@ pub const Output = struct {
 
     fn write_unique_lines(
         self: *Output,
-        writer: *fs.File.Writer,
+        writer: *File.Writer,
         line_table: LineTable,
     ) !void {
         var prev = line_table.lines[0];
@@ -91,7 +96,7 @@ pub const Output = struct {
     }
 
     pub fn create_tmp_dir(self: *Output) !void {
-        fs.cwd().makeDir(self.s.tmp_dir) catch |err| {
+        Dir.cwd().createDir(self.io, self.s.tmp_dir, undefined) catch |err| {
             switch (err) {
                 error.PathAlreadyExists => {},
                 else => return err,
@@ -100,7 +105,7 @@ pub const Output = struct {
     }
 
     pub fn cleanup(self: *Output) void {
-        fs.cwd().deleteTree(self.s.tmp_dir) catch {};
+        Dir.cwd().deleteTree(self.io, self.s.tmp_dir) catch {};
     }
 
     pub fn write_to_tmp(self: *Output, line_table: LineTable, run: usize) !void {
@@ -110,7 +115,11 @@ pub const Output = struct {
             .{ self.s.tmp_dir, run },
         );
         defer self.gpa.free(tmp_file_name);
-        var writer = (try fs.cwd().createFile(tmp_file_name, .{})).writer(self.buffer);
+        var writer = (try Dir.cwd().createFile(
+            self.io,
+            tmp_file_name,
+            .{},
+        )).writer(self.io, self.buffer);
         if (self.s.unique) {
             try self.write_unique_lines(&writer, line_table);
         } else {

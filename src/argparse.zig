@@ -3,6 +3,7 @@ const std = @import("std");
 const build_options = @import("build_options");
 const assert = std.debug.assert;
 const mem = std.mem;
+const Io = std.Io;
 const parseInt = std.fmt.parseInt;
 const printer = @import("printer.zig");
 const print_err = printer.print_err;
@@ -10,11 +11,11 @@ const print_err = printer.print_err;
 pub const Memory = struct {
     value: usize,
 
-    pub fn parse(str: []const u8) !Memory {
+    pub fn parse(io: Io, str: []const u8) !Memory {
         const value = parseInt(usize, str[0 .. str.len - 1], 10) catch |err| {
             switch (err) {
-                error.InvalidCharacter => try print_err("Invalid memory size: {s}\n", .{str}),
-                error.Overflow => try print_err("Memory size too large: {s}\n", .{str}),
+                error.InvalidCharacter => try print_err(io, "Invalid memory size: {s}\n", .{str}),
+                error.Overflow => try print_err(io, "Memory size too large: {s}\n", .{str}),
             }
             return error.InvalidMemsize;
         };
@@ -23,19 +24,19 @@ pub const Memory = struct {
             'M' => value * 1024 * 1024,
             'G' => value * 1024 * 1024 * 1024,
             else => {
-                try print_err("Invalid memory size: {s}\n", .{str});
+                try print_err(io, "Invalid memory size: {s}\n", .{str});
                 return error.InvalidMemsize;
             },
         };
         if (memsize > std.math.maxInt(u32)) {
-            try print_err("Memory size too large: {s}\n", .{str});
+            try print_err(io, "Memory size too large: {s}\n", .{str});
             return error.InvalidMemsize;
         }
         return .{ .value = memsize };
     }
 };
 
-pub fn parse_args(args: []const [:0]const u8, comptime CliArgs: type) !?CliArgs {
+pub fn parse_args(io: Io, args: []const [:0]const u8, comptime CliArgs: type) !?CliArgs {
     comptime {
         assert(@typeInfo(CliArgs) == .@"struct");
         assert(@hasDecl(CliArgs, "help"));
@@ -44,17 +45,17 @@ pub fn parse_args(args: []const [:0]const u8, comptime CliArgs: type) !?CliArgs 
     var cli_args: CliArgs = .{};
     if (args.len == 1) return cli_args;
     if (mem.eql(u8, args[1], "--help") or mem.eql(u8, args[1], "-h")) {
-        try printer.print(CliArgs.help);
+        try printer.print(io, CliArgs.help);
         return null;
     }
     if (mem.eql(u8, args[1], "--version") or mem.eql(u8, args[1], "-v")) {
-        try printer.print(CliArgs.version);
+        try printer.print(io, CliArgs.version);
         return null;
     }
 
     for (args[1..], 1..) |arg, i| {
         if (arg[0] == '-') {
-            try parse_field(arg, CliArgs, &cli_args);
+            try parse_field(io, arg, CliArgs, &cli_args);
         } else {
             if (@hasField(CliArgs, "positional")) {
                 @field(cli_args, "positional") = args[i..];
@@ -72,17 +73,17 @@ inline fn flag_matches(comptime field_name: []const u8, arg: [:0]const u8) !bool
     return false;
 }
 
-inline fn parse_val(arg: [:0]const u8, comptime T: type) !T {
+inline fn parse_val(io: Io, arg: [:0]const u8, comptime T: type) !T {
     var parts = mem.splitScalar(u8, arg, '=');
     assert(parts.next() != null);
     const val = parts.next() orelse {
-        try print_err("Invalid flag (missing '=value'): {s}\n", .{arg});
+        try print_err(io, "Invalid flag (missing '=value'): {s}\n", .{arg});
         return error.InvalidFlag;
     };
     return switch (T) {
         u8 => {
             if (val.len != 1) {
-                try print_err("Invalid flag (missing value): {s}\n", .{arg});
+                try print_err(io, "Invalid flag (missing value): {s}\n", .{arg});
                 return error.InvalidFlag;
             }
             return val[0];
@@ -90,31 +91,31 @@ inline fn parse_val(arg: [:0]const u8, comptime T: type) !T {
         []const u8 => val,
         usize => parseInt(usize, val, 10) catch |err| {
             switch (err) {
-                error.InvalidCharacter => try print_err("Invalid integer value: {s}\n", .{arg}),
-                error.Overflow => try print_err("Flag value too large: {s}\n", .{arg}),
+                error.InvalidCharacter => try print_err(io, "Invalid integer value: {s}\n", .{arg}),
+                error.Overflow => try print_err(io, "Flag value too large: {s}\n", .{arg}),
             }
             return error.InvalidFlag;
         },
-        Memory => try Memory.parse(val),
+        Memory => try Memory.parse(io, val),
         else => @compileError("Unsupported field type: " ++ @typeName(T)),
     };
 }
 
-fn parse_field(arg: [:0]const u8, comptime CliArgs: type, cli_args: *CliArgs) !void {
+fn parse_field(io: Io, arg: [:0]const u8, comptime CliArgs: type, cli_args: *CliArgs) !void {
     var parsed = false;
     inline for (std.meta.fields(CliArgs)) |field| {
         if (try flag_matches(field.name, arg)) {
             parsed = true;
             switch (@typeInfo(field.type)) {
                 .bool => @field(cli_args, field.name) = true,
-                .int, .pointer => @field(cli_args, field.name) = try parse_val(arg, field.type),
+                .int, .pointer => @field(cli_args, field.name) = try parse_val(io, arg, field.type),
                 .optional => |T| {
                     if (field.type != ?[]const [:0]const u8)
-                        @field(cli_args, field.name) = try parse_val(arg, T.child);
+                        @field(cli_args, field.name) = try parse_val(io, arg, T.child);
                 },
                 .@"struct" => {
                     switch (field.type) {
-                        Memory => @field(cli_args, field.name) = try parse_val(arg, field.type),
+                        Memory => @field(cli_args, field.name) = try parse_val(io, arg, field.type),
                         else => @compileError("Unsupported struct type: " ++ @typeName(field.type)),
                     }
                 },
@@ -123,7 +124,7 @@ fn parse_field(arg: [:0]const u8, comptime CliArgs: type, cli_args: *CliArgs) !v
         }
     }
     if (!parsed) {
-        try print_err("Invalid flag: {s}\n", .{arg});
+        try print_err(io, "Invalid flag: {s}\n", .{arg});
         return error.InvalidFlag;
     }
 }
@@ -197,13 +198,14 @@ pub const Args = struct {
 };
 
 test "Args: parse" {
+    const io = std.testing.io;
     const raw_basic: []const [:0]const u8 = &.{ "msort", "file1.txt", "file2.txt" };
-    const args_basic = try parse_args(raw_basic, Args);
+    const args_basic = try parse_args(io, raw_basic, Args);
     try std.testing.expectEqualStrings("file1.txt", args_basic.?.positional.?[0]);
     try std.testing.expectEqualStrings("file2.txt", args_basic.?.positional.?[1]);
 
     const raw_boolean: []const [:0]const u8 = &.{ "msort", "-u", "file1.txt" };
-    const args_boolean = try parse_args(raw_boolean, Args);
+    const args_boolean = try parse_args(io, raw_boolean, Args);
     try std.testing.expect(args_boolean.?.unique);
 
     const raw_values: []const [:0]const u8 = &.{
@@ -213,7 +215,7 @@ test "Args: parse" {
         "-o=out.out",
         "file1.txt",
     };
-    const args_values = try parse_args(raw_values, Args);
+    const args_values = try parse_args(io, raw_values, Args);
     try std.testing.expectEqualStrings("newtmp", args_values.?.tmp_dir);
     try std.testing.expectEqual(1 * 1024 * 1024 * 1024, args_values.?.memsize.value);
     try std.testing.expectEqualStrings("out.out", args_values.?.outfile.?);
