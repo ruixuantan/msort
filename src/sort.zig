@@ -139,7 +139,7 @@ pub fn quicksort(
             line_table.contents,
             pivot,
             line_table.contents,
-        ) == -1) : (i += 1) {}
+        ) < 0) : (i += 1) {}
         j -= 1;
         while (Line.cmp(
             s,
@@ -147,7 +147,7 @@ pub fn quicksort(
             line_table.contents,
             pivot,
             line_table.contents,
-        ) == 1) : (j -= 1) {}
+        ) > 0) : (j -= 1) {}
         if (@as(usize, @intCast(i)) > j) break;
         std.mem.swap(Line, &line_table.lines[@intCast(i)], &line_table.lines[j]);
     }
@@ -214,5 +214,18 @@ test "quicksort" {
     try quicksort(.{ .lines = &lines, .contents = contents }, &s, 0);
     for (0..26) |k| {
         try std.testing.expectEqual(@as(u8, @intCast('a' + k)), lines[k].string(contents)[0]);
+    }
+}
+
+test "quicksort: numeric comparisons with magnitudes greater than one" {
+    const contents = "987654321098765432109876543210";
+    var lines: [contents.len]Line = undefined;
+    for (&lines, 0..) |*l, i| {
+        l.* = Line.init(contents[i .. i + 1], i, null, ' ');
+    }
+    const s = Settings{ .cmp_type = .numeric };
+    try quicksort(.{ .lines = &lines, .contents = contents }, &s, 0);
+    for (lines, 0..) |l, i| {
+        try std.testing.expectEqual(@as(u8, @intCast('0' + i / 3)), l.string(contents)[0]);
     }
 }

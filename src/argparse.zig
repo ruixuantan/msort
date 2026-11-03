@@ -103,23 +103,24 @@ inline fn parse_val(io: Io, arg: [:0]const u8, comptime T: type) !T {
 
 fn parse_field(io: Io, arg: [:0]const u8, comptime CliArgs: type, cli_args: *CliArgs) !void {
     var parsed = false;
-    inline for (std.meta.fields(CliArgs)) |field| {
-        if (try flag_matches(field.name, arg)) {
+    const fields = @typeInfo(CliArgs).@"struct";
+    inline for (fields.field_names, fields.field_types) |field_name, field_type| {
+        if (try flag_matches(field_name, arg)) {
             parsed = true;
-            switch (@typeInfo(field.type)) {
-                .bool => @field(cli_args, field.name) = true,
-                .int, .pointer => @field(cli_args, field.name) = try parse_val(io, arg, field.type),
+            switch (@typeInfo(field_type)) {
+                .bool => @field(cli_args, field_name) = true,
+                .int, .pointer => @field(cli_args, field_name) = try parse_val(io, arg, field_type),
                 .optional => |T| {
-                    if (field.type != ?[]const [:0]const u8)
-                        @field(cli_args, field.name) = try parse_val(io, arg, T.child);
+                    if (field_type != ?[]const [:0]const u8)
+                        @field(cli_args, field_name) = try parse_val(io, arg, T.child);
                 },
                 .@"struct" => {
-                    switch (field.type) {
-                        Memory => @field(cli_args, field.name) = try parse_val(io, arg, field.type),
-                        else => @compileError("Unsupported struct type: " ++ @typeName(field.type)),
+                    switch (field_type) {
+                        Memory => @field(cli_args, field_name) = try parse_val(io, arg, field_type),
+                        else => @compileError("Unsupported struct type: " ++ @typeName(field_type)),
                     }
                 },
-                else => @compileError("Unsupported field type: " ++ @typeName(field.type)),
+                else => @compileError("Unsupported field type: " ++ @typeName(field_type)),
             }
         }
     }

@@ -27,7 +27,11 @@ pub const Output = struct {
     pub fn get_writer(self: *Output) !File.Writer {
         if (self.s.outfile) |o| {
             var file: File = undefined;
-            file = Dir.cwd().openFile(self.io, o, .{ .mode = .write_only }) catch |err| switch (err) {
+            file = Dir.cwd().openFile(
+                self.io,
+                o,
+                .{ .mode = .write_only },
+            ) catch |err| switch (err) {
                 error.FileNotFound => try Dir.cwd().createFile(self.io, o, .{}),
                 else => |e| return e,
             };
@@ -96,7 +100,7 @@ pub const Output = struct {
     }
 
     pub fn create_tmp_dir(self: *Output) !void {
-        Dir.cwd().createDir(self.io, self.s.tmp_dir, undefined) catch |err| {
+        Dir.cwd().createDir(self.io, self.s.tmp_dir, .default_dir) catch |err| {
             switch (err) {
                 error.PathAlreadyExists => {},
                 else => return err,
@@ -127,3 +131,23 @@ pub const Output = struct {
         }
     }
 };
+
+test "Output: temporary directory supports run files" {
+    const test_gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(io, ".", test_gpa);
+    defer test_gpa.free(tmp_path);
+    const run_path = try std.fs.path.join(test_gpa, &.{ tmp_path, "runs" });
+    defer test_gpa.free(run_path);
+    const s = Settings{ .tmp_dir = run_path };
+    var buffer: [1024]u8 = undefined;
+    var output = try Output.init(test_gpa, io, &s, &buffer);
+    defer output.cleanup();
+
+    try output.create_tmp_dir();
+    try output.create_tmp_dir();
+    const file = try tmp.dir.createFile(io, "runs/0.tmp", .{});
+    defer file.close(io);
+}

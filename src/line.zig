@@ -23,7 +23,7 @@ pub const KeySlice = struct {
 
         while (i < max_i) : (i += simd.VEC_LEN) {
             const bytes: simd.VecU8 = raw[i .. i + simd.VEC_LEN][0..simd.VEC_LEN].*;
-            var mask: std.meta.Int(.unsigned, simd.VEC_LEN) = @bitCast(bytes == sep);
+            var mask: @Int(.unsigned, simd.VEC_LEN) = @bitCast(bytes == sep);
             while (mask != 0) {
                 seen += 1;
                 if (seen == key.pos) {
