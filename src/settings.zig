@@ -36,7 +36,11 @@ pub const Key = struct {
             }
             const pos = std.fmt.parseInt(usize, part[0 .. i + 1], 10) catch |err| {
                 switch (err) {
-                    error.InvalidCharacter => try printer.print_err(io, "Invalid key: {s}\n", .{str}),
+                    error.InvalidCharacter => try printer.print_err(
+                        io,
+                        "Invalid key: {s}\n",
+                        .{str},
+                    ),
                     error.Overflow => try printer.print_err(io, "Key too large: {s}\n", .{str}),
                 }
                 return error.InvalidKey;
@@ -78,7 +82,11 @@ pub const Settings = struct {
         for (files) |filename| {
             var file = Io.Dir.cwd().openFile(io, filename, .{ .mode = .read_only }) catch |err| {
                 switch (err) {
-                    error.FileNotFound => try printer.print_err(io, "No such file: {s}", .{filename}),
+                    error.FileNotFound => try printer.print_err(
+                        io,
+                        "No such file: {s}",
+                        .{filename},
+                    ),
                     error.AccessDenied => try printer.print_err(
                         io,
                         "Read access denied: {s}",
