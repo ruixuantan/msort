@@ -1,7 +1,7 @@
 const std = @import("std");
 const simd = @import("simd.zig");
 
-inline fn isDigit(c: u8) bool {
+inline fn is_digit(c: u8) bool {
     return c >= '0' and c <= '9';
 }
 
@@ -10,10 +10,10 @@ inline fn at(s: []const u8, i: usize) u8 {
 }
 
 pub fn frac(a: []const u8, b: []const u8) i8 {
-    return fracWithDecimal(a, b, '.');
+    return frac_with_decimal(a, b, '.');
 }
 
-fn fracWithDecimal(a: []const u8, b: []const u8, decimal_point: u8) i8 {
+fn frac_with_decimal(a: []const u8, b: []const u8, decimal_point: u8) i8 {
     var ia: usize = 0;
     var ib: usize = 0;
     const ca0 = at(a, ia);
@@ -26,48 +26,48 @@ fn fracWithDecimal(a: []const u8, b: []const u8, decimal_point: u8) i8 {
             const ca = at(a, ia);
             const cb = at(b, ib);
             if (ca != cb) break;
-            if (!isDigit(ca)) return 0;
+            if (!is_digit(ca)) return 0;
         }
         const ca = at(a, ia);
         const cb = at(b, ib);
-        if (isDigit(ca) and isDigit(cb)) {
+        if (is_digit(ca) and is_digit(cb)) {
             return @truncate(@as(i16, ca) - cb);
         }
-        if (isDigit(ca)) {
-            return fracTrailingNonzero(a, ia);
+        if (is_digit(ca)) {
+            return frac_trailing_nonzero(a, ia);
         }
-        if (isDigit(cb)) {
-            return -fracTrailingNonzero(b, ib);
+        if (is_digit(cb)) {
+            return -frac_trailing_nonzero(b, ib);
         }
         return 0;
     } else if (ca0 == decimal_point) {
         ia += 1;
-        return fracTrailingNonzero(a, ia);
+        return frac_trailing_nonzero(a, ia);
     } else if (cb0 == decimal_point) {
         ib += 1;
-        return -fracTrailingNonzero(b, ib);
+        return -frac_trailing_nonzero(b, ib);
     }
     return 0;
 }
 
-fn fracTrailingNonzero(s: []const u8, start: usize) i8 {
+fn frac_trailing_nonzero(s: []const u8, start: usize) i8 {
     var i = start;
     while (at(s, i) == '0') i += 1;
-    return if (isDigit(at(s, i))) 1 else 0;
+    return if (is_digit(at(s, i))) 1 else 0;
 }
 
-fn skipLeadingZeros(s: []const u8, i: *usize) void {
+fn skip_leading_zeros(s: []const u8, i: *usize) void {
     while (at(s, i.*) == '0') i.* += 1;
 }
 
-fn skipZerosAfterDot(s: []const u8, i: *usize, decimal_point: u8) void {
+fn skip_zeros_after_dot(s: []const u8, i: *usize, decimal_point: u8) void {
     if (at(s, i.*) != decimal_point) return;
     i.* += 1;
     while (at(s, i.*) == '0') i.* += 1;
 }
 
 /// Compare numeric strings without full parse (coreutils `numcompare`, no grouping separators).
-pub fn numericWithDecimal(a: []const u8, b: []const u8, decimal_point: u8) i8 {
+pub fn numeric_with_decimal(a: []const u8, b: []const u8, decimal_point: u8) i8 {
     var ia: usize = 0;
     var ib: usize = 0;
     var tmpa = at(a, ia);
@@ -78,36 +78,36 @@ pub fn numericWithDecimal(a: []const u8, b: []const u8, decimal_point: u8) i8 {
 
     if (tmpa == '-') {
         ia += 1;
-        skipLeadingZeros(a, &ia);
+        skip_leading_zeros(a, &ia);
         tmpa = at(a, ia);
 
         if (tmpb != '-') {
-            if (tmpa == decimal_point) skipZerosAfterDot(a, &ia, decimal_point);
+            if (tmpa == decimal_point) skip_zeros_after_dot(a, &ia, decimal_point);
             tmpa = at(a, ia);
-            if (isDigit(tmpa)) return -1;
+            if (is_digit(tmpa)) return -1;
 
-            skipLeadingZeros(b, &ib);
+            skip_leading_zeros(b, &ib);
             tmpb = at(b, ib);
-            if (tmpb == decimal_point) skipZerosAfterDot(b, &ib, decimal_point);
+            if (tmpb == decimal_point) skip_zeros_after_dot(b, &ib, decimal_point);
             tmpb = at(b, ib);
-            return if (isDigit(tmpb)) -1 else 0;
+            return if (is_digit(tmpb)) -1 else 0;
         }
 
         ib += 1;
-        skipLeadingZeros(b, &ib);
+        skip_leading_zeros(b, &ib);
         tmpb = at(b, ib);
 
-        while (tmpa == tmpb and isDigit(tmpa)) {
+        while (tmpa == tmpb and is_digit(tmpa)) {
             ia += 1;
             tmpa = at(a, ia);
             ib += 1;
             tmpb = at(b, ib);
         }
 
-        if ((tmpa == decimal_point and !isDigit(tmpb)) or
-            (tmpb == decimal_point and !isDigit(tmpa)))
+        if ((tmpa == decimal_point and !is_digit(tmpb)) or
+            (tmpb == decimal_point and !is_digit(tmpa)))
         {
-            return fracWithDecimal(
+            return frac_with_decimal(
                 b[ib..],
                 a[ia..],
                 decimal_point,
@@ -117,13 +117,13 @@ pub fn numericWithDecimal(a: []const u8, b: []const u8, decimal_point: u8) i8 {
         tmp = @as(i16, tmpb) - tmpa;
 
         log_a = 0;
-        while (isDigit(tmpa)) : (log_a += 1) {
+        while (is_digit(tmpa)) : (log_a += 1) {
             ia += 1;
             tmpa = at(a, ia);
         }
 
         log_b = 0;
-        while (isDigit(tmpb)) : (log_b += 1) {
+        while (is_digit(tmpb)) : (log_b += 1) {
             ib += 1;
             tmpb = at(b, ib);
         }
@@ -135,46 +135,46 @@ pub fn numericWithDecimal(a: []const u8, b: []const u8, decimal_point: u8) i8 {
         return @truncate(tmp);
     } else if (tmpb == '-') {
         ib += 1;
-        skipLeadingZeros(b, &ib);
+        skip_leading_zeros(b, &ib);
         tmpb = at(b, ib);
-        if (tmpb == decimal_point) skipZerosAfterDot(b, &ib, decimal_point);
+        if (tmpb == decimal_point) skip_zeros_after_dot(b, &ib, decimal_point);
         tmpb = at(b, ib);
-        if (isDigit(tmpb)) return 1;
+        if (is_digit(tmpb)) return 1;
 
-        skipLeadingZeros(a, &ia);
+        skip_leading_zeros(a, &ia);
         tmpa = at(a, ia);
-        if (tmpa == decimal_point) skipZerosAfterDot(a, &ia, decimal_point);
+        if (tmpa == decimal_point) skip_zeros_after_dot(a, &ia, decimal_point);
         tmpa = at(a, ia);
-        return if (isDigit(tmpa)) 1 else 0;
+        return if (is_digit(tmpa)) 1 else 0;
     } else {
-        skipLeadingZeros(a, &ia);
+        skip_leading_zeros(a, &ia);
         tmpa = at(a, ia);
-        skipLeadingZeros(b, &ib);
+        skip_leading_zeros(b, &ib);
         tmpb = at(b, ib);
 
-        while (tmpa == tmpb and isDigit(tmpa)) {
+        while (tmpa == tmpb and is_digit(tmpa)) {
             ia += 1;
             tmpa = at(a, ia);
             ib += 1;
             tmpb = at(b, ib);
         }
 
-        if ((tmpa == decimal_point and !isDigit(tmpb)) or
-            (tmpb == decimal_point and !isDigit(tmpa)))
+        if ((tmpa == decimal_point and !is_digit(tmpb)) or
+            (tmpb == decimal_point and !is_digit(tmpa)))
         {
-            return fracWithDecimal(a[ia..], b[ib..], decimal_point);
+            return frac_with_decimal(a[ia..], b[ib..], decimal_point);
         }
 
         tmp = @as(i16, tmpa) - tmpb;
 
         log_a = 0;
-        while (isDigit(tmpa)) : (log_a += 1) {
+        while (is_digit(tmpa)) : (log_a += 1) {
             ia += 1;
             tmpa = at(a, ia);
         }
 
         log_b = 0;
-        while (isDigit(tmpb)) : (log_b += 1) {
+        while (is_digit(tmpb)) : (log_b += 1) {
             ib += 1;
             tmpb = at(b, ib);
         }
@@ -188,7 +188,7 @@ pub fn numericWithDecimal(a: []const u8, b: []const u8, decimal_point: u8) i8 {
 }
 
 pub fn numeric(a: []const u8, b: []const u8) i8 {
-    return numericWithDecimal(a, b, '.');
+    return numeric_with_decimal(a, b, '.');
 }
 
 pub fn lexicographic(a: []const u8, b: []const u8) i8 {
@@ -249,7 +249,7 @@ test "frac" {
     try std.testing.expectEqual(0, frac(".", "."));
 }
 
-test "numericWithDecimal" {
-    try std.testing.expectEqual(0, numericWithDecimal("1,5", "1,5", ','));
-    try std.testing.expectEqual(-1, numericWithDecimal("1,5", "1,6", ','));
+test "numeric_with_decimal" {
+    try std.testing.expectEqual(0, numeric_with_decimal("1,5", "1,5", ','));
+    try std.testing.expectEqual(-1, numeric_with_decimal("1,5", "1,6", ','));
 }
