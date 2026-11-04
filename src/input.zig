@@ -88,18 +88,16 @@ pub const Input = struct {
             self.reader.interface.end - self.reader.interface.seek,
         ) catch unreachable;
 
-        var i: usize = 0;
-        var prev = i;
-        while (i < string.len and self.lines.items.len < self.lines.capacity) : (i += 1) {
-            if (string[i] == self.s.delimiter) {
-                self.lines.appendAssumeCapacity(
-                    Line.init(string[prev..i], prev, self.s.first_key, self.s.separator),
-                );
-                prev = i + 1;
-            }
+        var prev: usize = 0;
+        while (self.lines.items.len < self.lines.capacity) {
+            const pos = mem.findScalarPos(u8, string, prev, self.s.delimiter) orelse break;
+            self.lines.appendAssumeCapacity(
+                Line.init(string[prev..pos], prev, self.s.first_key, self.s.separator),
+            );
+            prev = pos + 1;
         }
 
-        if (string[i - 1] != self.s.delimiter and
+        if (prev < string.len and
             self.reader.interface.end < self.buffer.len - 1 and
             self.lines.items.len < self.lines.capacity)
         {
@@ -107,13 +105,13 @@ pub const Input = struct {
             @branchHint(.cold);
             self.lines.appendAssumeCapacity(
                 Line.init(
-                    string[prev..i],
+                    string[prev..],
                     prev,
                     self.s.first_key,
                     self.s.separator,
                 ),
             );
-            prev = i;
+            prev = string.len;
         }
 
         return .{
@@ -185,6 +183,27 @@ test "Input: next, test_26.txt" {
         &[_][]const u8{"test_data/test_26.txt"},
         26 * Line.size(),
     );
+}
+
+test "Input: next, single unterminated line" {
+    const test_gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "input.txt", .data = "apple" });
+    const path = try tmp.dir.realPathFileAlloc(io, "input.txt", test_gpa);
+    defer test_gpa.free(path);
+    const paths = [_][]const u8{path};
+    const s = Settings{ .files = &paths };
+    var buffer: [32]u8 = undefined;
+    var input = try Input.init(test_gpa, io, &s, &buffer, Line.size());
+    defer input.deinit();
+
+    try std.testing.expect(input.has_next());
+    const table = try input.next();
+    try std.testing.expectEqual(@as(usize, 1), table.lines.len);
+    try std.testing.expectEqualStrings("apple", table.lines[0].string(table.contents));
+    try std.testing.expect(!input.has_next());
 }
 
 test "Input: next, test_26.txt, line_table_size 10 lines" {
