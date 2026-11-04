@@ -13,7 +13,7 @@ SIMD and keeping memory use small.
 
 ## Build and test
 
-Requires Zig **0.17.0** and Make.
+Requires Zig **0.17.1** and Make.
 
 ```sh
 make build        # Fast optimized build

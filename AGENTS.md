@@ -4,7 +4,7 @@ These instructions apply to the entire repository, regardless of the agent or ed
 
 ## Zig version and APIs
 
-- Target Zig **0.17.0**, as declared in `build.zig.zon`. Verify with `zig version`.
+- Target Zig **0.17.1**, as declared in `build.zig.zon`. Verify with `zig version`.
 - Check the installed Zig 0.17 standard-library source or official documentation before
   introducing unfamiliar APIs; do not copy examples for older Zig releases without checking them.
 - Use `std.Io` for I/O and pass the `io` context explicitly. In the executable, obtain the
