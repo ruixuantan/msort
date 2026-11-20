@@ -13,9 +13,7 @@ pub fn print(io: Io, comptime message: []const u8) !void {
 
 pub fn print_err(io: Io, comptime message: []const u8, args: anytype) !void {
     var stderr_buffer: [1024]u8 = undefined;
-    var stderr = File.stderr();
-    defer stderr.close(io);
-    var stderr_writer = stderr.writer(io, &stderr_buffer);
+    var stderr_writer = File.stderr().writer(io, &stderr_buffer);
     try stderr_writer.interface.print(message, args);
     try stderr_writer.interface.flush();
 }

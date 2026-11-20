@@ -2,8 +2,6 @@ const std = @import("std");
 const msort = @import("msort");
 
 pub fn main(init: std.process.Init) !void {
-    defer std.process.exit(0);
-    errdefer std.process.exit(1);
     const gpa = init.gpa;
     const io = init.io;
 

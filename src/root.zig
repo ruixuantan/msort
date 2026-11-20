@@ -6,6 +6,7 @@ pub const sort = @import("sort.zig");
 const input = @import("input.zig");
 const output = @import("output.zig");
 const merge = @import("merge.zig");
+const losertree = @import("losertree.zig");
 
 pub const Args = argparse.Args;
 pub const Settings = settings.Settings;
@@ -13,6 +14,7 @@ const Line = line.Line;
 pub const Input = input.Input;
 pub const Output = output.Output;
 pub const Merge = merge.Merge;
+pub const Losertree = losertree.Losertree;
 
 test {
     _ = @import("cmp.zig");
@@ -23,4 +25,5 @@ test {
     _ = input;
     _ = output;
     _ = merge;
+    _ = losertree;
 }

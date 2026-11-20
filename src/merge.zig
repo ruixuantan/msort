@@ -4,42 +4,16 @@ const Allocator = mem.Allocator;
 const Io = std.Io;
 const Dir = Io.Dir;
 const File = Io.File;
-const line = @import("line.zig");
-const Line = line.Line;
 const Settings = @import("settings.zig").Settings;
+const Losertree = @import("losertree.zig").Losertree;
 
 pub const Merge = struct {
     gpa: Allocator,
     io: Io,
     s: *const Settings,
-    buffer: []u8,
     files: std.ArrayList(File),
     readers: std.ArrayList(*File.Reader),
-    num_runs: usize,
     writer: *File.Writer,
-
-    const HeapNode = struct { run_idx: usize, string: []const u8 };
-
-    const HeapContext = struct { s: *const Settings };
-
-    inline fn compare_strings(ctx: HeapContext, a: []const u8, b: []const u8) i8 {
-        const a_line = Line.init(a, 0, ctx.s.first_key, ctx.s.separator);
-        const b_line = Line.init(b, 0, ctx.s.first_key, ctx.s.separator);
-        return Line.cmp(ctx.s, a_line, a, b_line, b);
-    }
-
-    fn compare(ctx: HeapContext, a: HeapNode, b: HeapNode) std.math.Order {
-        const key_order = compare_strings(ctx, a.string, b.string);
-        if (key_order < 0) {
-            return .lt;
-        } else if (key_order > 0) {
-            return .gt;
-        } else {
-            return std.math.order(a.run_idx, b.run_idx);
-        }
-    }
-
-    const Heap = std.PriorityQueue(HeapNode, HeapContext, compare);
 
     pub fn init(
         gpa: Allocator,
@@ -51,7 +25,15 @@ pub const Merge = struct {
     ) !Merge {
         std.debug.assert(num_runs > 0);
         var files = try std.ArrayList(File).initCapacity(gpa, num_runs);
+        errdefer {
+            for (files.items) |file| file.close(io);
+            files.deinit(gpa);
+        }
         var readers = try std.ArrayList(*File.Reader).initCapacity(gpa, num_runs);
+        errdefer {
+            for (readers.items) |reader| gpa.destroy(reader);
+            readers.deinit(gpa);
+        }
         const run_buffer_size = @divFloor(buffer.len, num_runs);
         for (0..num_runs) |i| {
             const filename = try std.fmt.allocPrint(gpa, "{s}/{d}.tmp", .{ s.tmp_dir, i });
@@ -66,11 +48,9 @@ pub const Merge = struct {
         return .{
             .gpa = gpa,
             .io = io,
-            .buffer = buffer,
             .s = s,
             .files = files,
             .readers = readers,
-            .num_runs = num_runs,
             .writer = writer,
         };
     }
@@ -86,46 +66,16 @@ pub const Merge = struct {
         self.files.deinit(self.gpa);
     }
 
-    fn next_heap_node(self: *Merge, run_no: usize) !?HeapNode {
-        std.debug.assert(run_no < self.num_runs);
-        const string = self.readers.items[run_no].interface.takeDelimiterInclusive(
-            self.s.delimiter,
-        ) catch |err| {
-            switch (err) {
-                error.EndOfStream => return null,
-                else => return err,
-            }
-        };
-        return .{ .run_idx = run_no, .string = string };
-    }
-
     pub fn kway(self: *Merge) !void {
-        const heap_context = HeapContext{ .s = self.s };
-        var heap = Heap.initContext(heap_context);
-        defer heap.deinit(self.gpa);
-        for (0..self.num_runs) |run_no| {
-            if (try self.next_heap_node(run_no)) |node| {
-                try heap.push(self.gpa, node);
-            }
-        }
+        var tree = try Losertree.init(self.gpa, self.readers.items, self.s);
+        defer tree.deinit(self.gpa);
 
-        var writer_buffer_size: usize = 0;
-        while (heap.items.len > 0) {
-            std.debug.assert(heap.items.len <= self.num_runs);
-            var node = heap.pop().?;
-            if (writer_buffer_size + node.string.len > self.writer.interface.buffer.len) {
-                try self.writer.interface.flush();
-                writer_buffer_size = 0;
-            }
-            try self.writer.interface.writeAll(node.string);
-            if (try self.next_heap_node(node.run_idx)) |n| try heap.push(self.gpa, n);
-
+        while (tree.peek()) |record| {
+            try self.writer.interface.writeAll(record);
             if (self.s.unique) {
-                while (heap.peek()) |peek_node| {
-                    if (compare_strings(heap_context, node.string, peek_node.string) != 0) break;
-                    node = heap.pop().?;
-                    if (try self.next_heap_node(node.run_idx)) |n| try heap.push(self.gpa, n);
-                }
+                try tree.advance_unique(self.gpa);
+            } else {
+                try tree.advance();
             }
         }
         try self.writer.interface.flush();
@@ -133,20 +83,17 @@ pub const Merge = struct {
 };
 
 test "Merge: kway" {
-    const gpa = std.testing.allocator;
+    const test_gpa = std.testing.allocator;
     const io = std.testing.io;
-    var s = Settings{
-        .tmp_dir = "test_data/tmp",
-    };
-    const buffer = try gpa.alloc(u8, 50);
-    defer gpa.free(buffer);
+    const s = Settings{ .tmp_dir = "test_data/tmp" };
+    var buffer: [50]u8 = undefined;
 
     var tmp_file = try Dir.cwd().createFile(io, "test_data/tmp/stdout", .{});
     defer Dir.cwd().deleteFile(io, "test_data/tmp/stdout") catch {};
     var output_buffer: [1024]u8 = undefined;
     var writer = tmp_file.writer(io, &output_buffer);
 
-    var merge = try Merge.init(gpa, io, &s, buffer, 2, &writer);
+    var merge = try Merge.init(test_gpa, io, &s, &buffer, 2, &writer);
     defer merge.deinit();
     try merge.kway();
 
@@ -194,5 +141,41 @@ test "Merge: kway" {
     ;
     const contents = try reader.interface.take(expected.len);
     try std.testing.expectEqualStrings(expected, contents);
-    try std.testing.expectEqual(error.EndOfStream, reader.interface.take(1));
+    try std.testing.expectError(error.EndOfStream, reader.interface.take(1));
+}
+
+test "Merge: kway keeps first record for each unique key" {
+    const test_gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try tmp.dir.realPathFileAlloc(io, ".", test_gpa);
+    defer test_gpa.free(path);
+    try tmp.dir.writeFile(io, .{ .sub_path = "0.tmp", .data = "1 first\n3 third\n" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "1.tmp", .data = "1 other\n1 again\n2 second\n" });
+
+    const s = Settings{
+        .tmp_dir = path,
+        .unique = true,
+        .first_key = .{ .pos = 0 },
+        .keys = &.{.{ .pos = 0 }},
+    };
+    var input_buffer: [24]u8 = undefined;
+    var output_buffer: [12]u8 = undefined;
+    {
+        const file = try tmp.dir.createFile(io, "output", .{});
+        defer file.close(io);
+        var writer = file.writer(io, &output_buffer);
+        var merge = try Merge.init(test_gpa, io, &s, &input_buffer, 2, &writer);
+        defer merge.deinit();
+        try merge.kway();
+    }
+
+    const file = try tmp.dir.openFile(io, "output", .{ .mode = .read_only });
+    defer file.close(io);
+    const expected = "1 first\n2 second\n3 third\n";
+    var read_buffer: [expected.len]u8 = undefined;
+    var reader = file.reader(io, &read_buffer);
+    try std.testing.expectEqualStrings(expected, try reader.interface.take(expected.len));
+    try std.testing.expectError(error.EndOfStream, reader.interface.take(1));
 }
