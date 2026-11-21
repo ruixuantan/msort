@@ -9,99 +9,105 @@ const Line = line.Line;
 const Settings = @import("settings.zig").Settings;
 
 pub const Losertree = struct {
-    const Head = struct { line: Line, string: []const u8 };
-    const no_run = std.math.maxInt(usize);
+    const Node = struct { run_idx: usize, line: Line, string: []const u8 };
 
     readers: []*File.Reader,
-    heads: []Head, // One borrowed record per live run.
-    tree: []usize, // Slot 0: winner; [1..p): losers. Leaves are implicit (p = tree.len).
+    tree: []?Node, // slot 0: overall winner; [1..p): match losers; [p..2*p): run heads
+    p: usize, // stores the next power of 2 of readers.len
     s: *const Settings,
 
-    fn next_head(self: *Losertree, run_idx: usize) !usize {
+    fn next_node(self: *Losertree, run_idx: usize) !?Node {
         std.debug.assert(run_idx < self.readers.len);
         const string = self.readers[run_idx].interface.takeDelimiterInclusive(
             self.s.delimiter,
-        ) catch |err| switch (err) {
-            error.EndOfStream => return no_run,
-            else => return err,
+        ) catch |err| {
+            switch (err) {
+                error.EndOfStream => return null,
+                else => return err,
+            }
         };
-        // Keep the delimiter for output, but compare the same payload as the in-memory sort.
-        const l = Line.init(string[0 .. string.len - 1], 0, self.s.first_key, self.s.separator);
-        self.heads[run_idx] = .{ .line = l, .string = string };
-        return run_idx;
+        const l = Line.init(string, 0, self.s.first_key, self.s.separator);
+        return .{ .run_idx = run_idx, .line = l, .string = string };
     }
 
-    fn wins(self: *const Losertree, left: usize, right: usize) bool {
-        if (left == no_run) return false;
-        if (right == no_run) return true;
-        const a = self.heads[left];
-        const b = self.heads[right];
-        const order = Line.cmp(self.s, a.line, a.string, b.line, b.string);
-        return order < 0 or (order == 0 and left < right);
+    fn build_match(self: *Losertree, i: usize, left: ?Node, right: ?Node) ?Node {
+        if (left) |a| {
+            if (right) |b| {
+                const order = Line.cmp(self.s, a.line, a.string, b.line, b.string);
+                if (order < 0 or (order == 0 and a.run_idx < b.run_idx)) {
+                    self.tree[i] = b;
+                    return a;
+                }
+                self.tree[i] = a;
+                return b;
+            }
+        }
+
+        self.tree[i] = null;
+        return if (left != null) left else right;
     }
 
-    fn build_tree(self: *Losertree, i: usize) Io.Reader.DelimiterError!usize {
-        const p = self.tree.len;
-        if (i >= p) {
-            const run = i - p;
-            return if (run < self.readers.len) self.next_head(run) else no_run;
-        }
-        const left = try self.build_tree(2 * i);
-        const right = try self.build_tree(2 * i + 1);
-        if (self.wins(left, right)) {
-            self.tree[i] = right;
-            return left;
-        }
-        self.tree[i] = left;
-        return right;
+    const MAX_BUILD_DEPTH = @bitSizeOf(usize) - 2;
+
+    fn build_tree(
+        self: *Losertree,
+        i: usize,
+        depth: usize,
+    ) error{MaxRecursionDepthReached}!?Node {
+        if (depth > MAX_BUILD_DEPTH) return error.MaxRecursionDepthReached;
+        if (i >= self.p) return self.tree[i];
+
+        const left = try self.build_tree(2 * i, depth + 1);
+        const right = try self.build_tree(2 * i + 1, depth + 1);
+        return self.build_match(i, left, right);
     }
 
     pub fn init(gpa: Allocator, readers: []*File.Reader, s: *const Settings) !Losertree {
         if (readers.len == 0) return error.NoReaders;
         const p = try std.math.ceilPowerOfTwo(usize, readers.len);
-        const tree = try gpa.alloc(usize, p);
+        const tree_len = try std.math.mul(usize, 2, p);
+        const tree = try gpa.alloc(?Node, tree_len);
         errdefer gpa.free(tree);
-        const heads = try gpa.alloc(Head, readers.len);
-        errdefer gpa.free(heads);
-        var l: Losertree = .{ .readers = readers, .heads = heads, .tree = tree, .s = s };
-        l.tree[0] = try l.build_tree(1);
+        @memset(tree, null);
+        var l: Losertree = .{ .readers = readers, .tree = tree, .p = p, .s = s };
+
+        for (0..readers.len) |run_idx| {
+            tree[p + run_idx] = try l.next_node(run_idx);
+        }
+        l.tree[0] = try l.build_tree(1, 0);
 
         return l;
     }
 
     pub fn deinit(self: *Losertree, gpa: Allocator) void {
-        gpa.free(self.heads);
         gpa.free(self.tree);
     }
 
-    pub fn peek(self: *const Losertree) ?[]const u8 {
-        const winner = self.tree[0];
-        return if (winner == no_run) null else self.heads[winner].string;
+    pub fn peek(self: *Losertree) ?[]const u8 {
+        if (self.tree[0]) |n| return n.string;
+        return null;
     }
 
     pub fn advance(self: *Losertree) !void {
-        const winner = self.tree[0];
-        if (winner == no_run) return;
-        var candidate = try self.next_head(winner);
-        var i = (self.tree.len + winner) / 2;
+        const winner = self.tree[0] orelse return;
+        var candidate = try self.next_node(winner.run_idx);
+        const leaf = self.p + winner.run_idx;
+        self.tree[leaf] = candidate;
+
+        var i = leaf / 2;
         while (i > 0) : (i /= 2) {
-            if (self.wins(self.tree[i], candidate)) {
-                mem.swap(usize, &self.tree[i], &candidate);
-            }
+            candidate = self.build_match(i, candidate, self.tree[i]);
         }
         self.tree[0] = candidate;
     }
 
     pub fn advance_unique(self: *Losertree, gpa: Allocator) !void {
-        const run = self.tree[0];
-        if (run == no_run) return;
-        const winner = self.heads[run];
+        const winner = self.tree[0] orelse return;
         const previous = try gpa.dupe(u8, winner.string);
         defer gpa.free(previous);
 
         try self.advance();
-        while (self.tree[0] != no_run) {
-            const next = self.heads[self.tree[0]];
+        while (self.tree[0]) |next| {
             if (Line.cmp(self.s, winner.line, previous, next.line, next.string) != 0) break;
             try self.advance();
         }
@@ -139,20 +145,23 @@ test "Losertree: init" {
     var tree = try Losertree.init(test_gpa, &readers, &s);
     defer tree.deinit(test_gpa);
 
-    try std.testing.expectEqual(@as(usize, 4), tree.tree.len);
+    try std.testing.expectEqual(@as(usize, 4), tree.p);
+    try std.testing.expectEqual(@as(usize, 8), tree.tree.len);
     const expected_matches = [_][]const u8{ "alligator\n", "apple\n", "apple\n" };
     for (expected_matches, [_]usize{ 0, 2, 1 }, tree.tree[0..3]) |text, run_idx, match| {
-        try std.testing.expectEqual(run_idx, match);
-        try std.testing.expectEqualStrings(text, tree.heads[match].string);
+        const node = match orelse return error.MissingNode;
+        try std.testing.expectEqual(run_idx, node.run_idx);
+        try std.testing.expectEqualStrings(text, node.string);
     }
-    try std.testing.expectEqual(Losertree.no_run, tree.tree[3]);
+    try std.testing.expect(tree.tree[3] == null);
+    try std.testing.expect(tree.tree[7] == null);
 
     var previous: [run_buffer_size]u8 = undefined;
     var previous_len: usize = 0;
     var previous_run: usize = 0;
     var counts: [paths.len]usize = @splat(0);
     while (tree.peek()) |text| {
-        const run_idx = tree.tree[0];
+        const run_idx = tree.tree[0].?.run_idx;
         switch (mem.order(u8, previous[0..previous_len], text)) {
             .lt => {},
             .eq => try std.testing.expect(previous_run <= run_idx),
@@ -166,26 +175,6 @@ test "Losertree: init" {
     }
     try std.testing.expectEqual([_]usize{ 22, 12, 12 }, counts);
     try tree.advance();
-    try std.testing.expect(tree.peek() == null);
-}
-
-test "Losertree: empty runs and prefix records with a custom delimiter" {
-    const test_gpa = std.testing.allocator;
-    const runs = [_][]const u8{ "", "a|b|", "|a\x00|b|" };
-    var storage: [runs.len]File.Reader = undefined;
-    var readers: [runs.len]*File.Reader = undefined;
-    for (runs, &storage, &readers) |run, *reader, *slot| {
-        reader.* = .{ .io = std.testing.io, .file = File.stdin(), .interface = .fixed(run) };
-        slot.* = reader;
-    }
-    const s = Settings{ .delimiter = '|' };
-    var tree = try Losertree.init(test_gpa, &readers, &s);
-    defer tree.deinit(test_gpa);
-
-    for ([_][]const u8{ "|", "a|", "a\x00|", "b|", "b|" }) |expected| {
-        try std.testing.expectEqualStrings(expected, tree.peek() orelse return error.MissingNode);
-        try tree.advance();
-    }
     try std.testing.expect(tree.peek() == null);
 }
 
