@@ -54,6 +54,7 @@ pub const Losertree = struct {
         i: usize,
         depth: usize,
     ) error{MaxRecursionDepthReached}!?Node {
+        @branchHint(.cold);
         if (depth > MAX_BUILD_DEPTH) return error.MaxRecursionDepthReached;
         if (i >= self.p) return self.tree[i];
 
@@ -63,7 +64,7 @@ pub const Losertree = struct {
     }
 
     pub fn init(gpa: Allocator, readers: []*File.Reader, s: *const Settings) !Losertree {
-        if (readers.len == 0) return error.NoReaders;
+        std.debug.assert(readers.len >= 2);
         const p = try std.math.ceilPowerOfTwo(usize, readers.len);
         const tree_len = try std.math.mul(usize, 2, p);
         const tree = try gpa.alloc(?Node, tree_len);
@@ -118,7 +119,6 @@ test "Losertree: init" {
     const test_gpa = std.testing.allocator;
     const io = std.testing.io;
     const s = Settings{ .tmp_dir = "test_data/tmp" };
-    try std.testing.expectError(error.NoReaders, Losertree.init(test_gpa, &.{}, &s));
     const paths = [_][]const u8{
         s.tmp_dir ++ "/0.tmp",
         s.tmp_dir ++ "/1.tmp",
@@ -178,16 +178,18 @@ test "Losertree: init" {
     try std.testing.expect(tree.peek() == null);
 }
 
-test "Losertree: peek and advance with one reader" {
+test "Losertree: peek does not advance either reader" {
     const test_gpa = std.testing.allocator;
     const io = std.testing.io;
     const s = Settings{ .tmp_dir = "test_data/tmp" };
     const file = try Dir.cwd().openFile(io, s.tmp_dir ++ "/1.tmp", .{ .mode = .read_only });
     defer file.close(io);
 
-    var buffer: [25]u8 = undefined;
-    var reader = file.reader(io, &buffer);
-    var readers = [_]*File.Reader{&reader};
+    var first_buffer: [25]u8 = undefined;
+    var second_buffer: [25]u8 = undefined;
+    var first_reader = file.reader(io, &first_buffer);
+    var second_reader = file.reader(io, &second_buffer);
+    var readers = [_]*File.Reader{ &first_reader, &second_reader };
     var tree = try Losertree.init(test_gpa, &readers, &s);
     defer tree.deinit(test_gpa);
 
@@ -206,9 +208,12 @@ test "Losertree: peek and advance with one reader" {
         "watermelon\n",
     };
     for (expected) |text| {
-        try std.testing.expectEqualStrings(text, tree.peek() orelse return error.MissingNode);
-        try std.testing.expectEqualStrings(text, tree.peek() orelse return error.MissingNode);
-        try tree.advance();
+        for (0..readers.len) |run_idx| {
+            try std.testing.expectEqualStrings(text, tree.peek() orelse return error.MissingNode);
+            try std.testing.expectEqualStrings(text, tree.peek() orelse return error.MissingNode);
+            try std.testing.expectEqual(run_idx, tree.tree[0].?.run_idx);
+            try tree.advance();
+        }
     }
     try std.testing.expect(tree.peek() == null);
     try tree.advance();
