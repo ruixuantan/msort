@@ -194,16 +194,20 @@ pub fn numeric(a: []const u8, b: []const u8) i8 {
 pub fn lexicographic(a: []const u8, b: []const u8) i8 {
     const len = @min(a.len, b.len);
     var i: usize = 0;
-    const max_i = len -| simd.VEC_LEN;
+    // Big-endian word order gives byte order without locating the first differing lane.
+    if (len >= 8) {
+        const first_a = std.mem.readInt(u64, a[0..8], .big);
+        const first_b = std.mem.readInt(u64, b[0..8], .big);
+        if (first_a != first_b) return if (first_a < first_b) -1 else 1;
+        i = 8;
+    }
 
-    while (i < max_i) : (i += simd.VEC_LEN) {
+    while (len - i >= simd.VEC_LEN) : (i += simd.VEC_LEN) {
         const a_vec: simd.VecU8 = a[i .. i + simd.VEC_LEN][0..simd.VEC_LEN].*;
         const b_vec: simd.VecU8 = b[i .. i + simd.VEC_LEN][0..simd.VEC_LEN].*;
-        const mask: @Int(.unsigned, simd.VEC_LEN) = @bitCast(a_vec != b_vec);
-        if (mask == 0) continue;
-
-        const diff_index = i + @ctz(mask);
-        if (a[diff_index] > b[diff_index]) return 1 else return -1;
+        if (std.simd.firstTrue(a_vec != b_vec)) |lane| {
+            return if (a[i + lane] < b[i + lane]) -1 else 1;
+        }
     }
 
     while (i < len) : (i += 1) {
@@ -231,6 +235,24 @@ test "lexicographic" {
     const a_short = "apple";
     const b_short = "banana";
     try std.testing.expectEqual(-1, lexicographic(a_short, b_short));
+}
+
+test "lexicographic: first difference across word, SIMD and tail boundaries" {
+    const a: [8 + 2 * simd.VEC_LEN + 1]u8 = @splat(0x80);
+    var unaligned: [a.len + 1]u8 = undefined;
+    for (0..a.len + 1) |len| {
+        const b = unaligned[1..][0..len];
+        @memset(b, 0x80);
+        try std.testing.expectEqual(0, lexicographic(a[0..len], b));
+        if (len < a.len) try std.testing.expectEqual(-1, lexicographic(b, a[0 .. len + 1]));
+        for (0..len) |i| {
+            b[i] = 0;
+            @memset(b[i + 1 ..], 0xff); // Later differences have the opposite sign.
+            try std.testing.expectEqual(-1, lexicographic(b, a[0..len]));
+            try std.testing.expectEqual(1, lexicographic(a[0..len], b));
+            b[i] = 0x80;
+        }
+    }
 }
 
 test "numeric" {

@@ -1,6 +1,5 @@
 const std = @import("std");
 const ascii = std.ascii;
-const mem = std.mem;
 const settings = @import("settings.zig");
 const Settings = settings.Settings;
 const CmpType = settings.CmpType;
@@ -135,44 +134,40 @@ pub const Line = struct {
         return ord * reverse;
     }
 
-    pub fn cmp(s: *const Settings, a: Line, a_buf: []const u8, b: Line, b_buf: []const u8) i8 {
+    fn cmp_fields(
+        s: *const Settings,
+        keys: []const Key,
+        a: KeySlice,
+        a_str: []const u8,
+        b: KeySlice,
+        b_str: []const u8,
+    ) i8 {
+        var ord = cmp_inner(keys[0].reverse, keys[0].cmp_type, a, a_str, b, b_str);
+        if (ord != 0) return ord;
+        for (keys[1..]) |key| {
+            const a_key = KeySlice.init(a_str, key, s.separator);
+            const b_key = KeySlice.init(b_str, key, s.separator);
+            ord = cmp_inner(key.reverse, key.cmp_type, a_key, a_str, b_key, b_str);
+            if (ord != 0) return ord;
+        }
+        return if (s.unique) 0 else lib_cmp.lexicographic(a_str, b_str);
+    }
+
+    pub inline fn cmp(
+        s: *const Settings,
+        a: Line,
+        a_buf: []const u8,
+        b: Line,
+        b_buf: []const u8,
+    ) i8 {
         const a_str = a.string(a_buf);
         const b_str = b.string(b_buf);
-
-        var ord: i8 = 0;
-        if (s.keys) |keys| {
-            ord = cmp_inner(
-                keys[0].reverse,
-                keys[0].cmp_type,
-                a.key_slice,
-                a_str,
-                b.key_slice,
-                b_str,
-            );
-            if (ord != 0) return ord * s.reverse;
-            for (keys[1..]) |key| {
-                const a_key = KeySlice.init(a_str, key, s.separator);
-                const b_key = KeySlice.init(b_str, key, s.separator);
-                ord = cmp_inner(
-                    key.reverse,
-                    key.cmp_type,
-                    a_key,
-                    a_str,
-                    b_key,
-                    b_str,
-                );
-                if (ord != 0) return ord * s.reverse;
-            }
-            if (!s.unique and ord == 0) {
-                switch (mem.order(u8, a_str, b_str)) {
-                    .lt => ord = -1,
-                    .gt => ord = 1,
-                    .eq => ord = 0,
-                }
-            }
-        } else {
-            ord = cmp_inner(1, s.cmp_type, a.key_slice, a_str, b.key_slice, b_str);
-        }
+        const ord = if (s.keys) |keys|
+            cmp_fields(s, keys, a.key_slice, a_str, b.key_slice, b_str)
+        else switch (s.cmp_type) {
+            .lexicographic => lib_cmp.lexicographic(a_str, b_str),
+            .numeric => lib_cmp.numeric(a_str, b_str),
+        };
         return ord * s.reverse;
     }
 };
@@ -181,6 +176,24 @@ pub const LineTable = struct {
     lines: []Line,
     contents: []const u8,
 };
+
+test "line: secondary numeric key, whole-line tie break and unique" {
+    const keys = [_]Key{ .{ .pos = 0 }, .{ .pos = 1, .cmp_type = .numeric, .reverse = -1 } };
+    var s = Settings{ .keys = &keys, .first_key = keys[0], .separator = ',' };
+    const a = "x,12,left";
+    const b = "x,2,right";
+    const c = "x,12,right";
+    const la = Line.init(a, 0, s.first_key, s.separator);
+    const lb = Line.init(b, 0, s.first_key, s.separator);
+    const lc = Line.init(c, 0, s.first_key, s.separator);
+    try std.testing.expect(Line.cmp(&s, la, a, lb, b) < 0);
+    try std.testing.expect(Line.cmp(&s, la, a, lc, c) < 0);
+    s.reverse = -1;
+    try std.testing.expect(Line.cmp(&s, la, a, lb, b) > 0);
+    try std.testing.expect(Line.cmp(&s, la, a, lc, c) > 0);
+    s.unique = true;
+    try std.testing.expectEqual(0, Line.cmp(&s, la, a, lc, c));
+}
 
 test "line: init without key" {
     const raw = "cherry,0.1,,2";

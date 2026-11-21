@@ -36,10 +36,14 @@ Options go before filenames; value options use `=`, and field indexes start at
 **0**. With no input files, msort reads stdin. Ordering is bytewise; use
 `LC_ALL=C` when comparing with Unix `sort`.
 
+To avoid spilling a single file, its bytes must fit in the input buffer (half of
+`-m`) and its line descriptors must fit in the line table (a quarter of `-m`).
+For example, `-m=256M` keeps the 125 MB, one-million-row LINEITEM sample in one run.
+
 ## A quick benchmark against Unix `sort`
 
-Local results on an Apple M4 with 24 GB RAM, macOS 27.2.1, and Zig 0.17.1 in fast
-mode, compared with macOS `/usr/bin/sort` 2.3-Apple (201). Both commands explicitly
+Baseline at `e450b71` on an Apple M4 with 24 GB RAM, macOS 27.2.1, and Zig 0.17.1
+in fast mode, compared with macOS `/usr/bin/sort` 2.3-Apple (201). Both commands explicitly
 set `--parallel=1`; msort's sorting code is currently single-threaded. Measured
 with `crap -d 3000`, default memory settings for both programs, `LC_ALL=C`, and
 output written to `/dev/null`. Times are means; memory is mean peak RSS reported
@@ -50,8 +54,11 @@ by `crap`.
 - **6,001,215 lines, 754 MB:** msort **994 ms / 8.64 MB**, macOS `/usr/bin/sort`
   **1.74 s / 1.09 GB** (4 and 3 runs, respectively).
 
-Both datasets produced identical output, checked byte for byte. These are short
-local measurements; performance varies with the input and machine.
+After optimizing byte comparisons and loser-tree replay, msort wall times fell
+from **149 to 120 ms** and **993 to 762 ms**, respectively, in a separate
+before/after test (medians of seven alternating warm runs at `-m=8M`, stdout
+to `/dev/null`). Both datasets still matched `LC_ALL=C /usr/bin/sort` byte for
+byte. These are local measurements; performance varies with the input and machine.
 
 msort has a narrower feature set than Unix `sort`, so it has fewer cases and
 compatibility details to handle. That simpler implementation can contribute to
